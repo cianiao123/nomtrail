@@ -1,0 +1,112 @@
+/* === Gradient Mesh Backgrounds === */
+.bg-hero-mesh {
+  background:
+    radial-gradient(ellipse 60% 50% at 50% 30%, var(--color-sky-100) 0%, transparent 70%),
+    radial-gradient(ellipse 50% 40% at 80% 60%, var(--color-sand-200) 0%, transparent 60%);
+}
+
+.bg-card-ambient {
+  background:
+    radial-gradient(ellipse at 0% 0%, var(--color-sky-100) 0%, transparent 50%),
+    var(--color-surface-bright);
+}
+
+/* === Grain/Noise Texture Overlay === */
+.grain-overlay {
+  position: relative;
+}
+.grain-overlay::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  opacity: 0.03;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  background-size: 256px 256px;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* === Subtle Dot Pattern === */
+.bg-dot-pattern {
+  background-image: radial-gradient(var(--color-outline-variant) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* === Subtle Mountain Silhouette Background === */
+.bg-mountains {
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 200' preserveAspectRatio='none'%3E%3Cdefs%3E%3ClinearGradient id='fade' x1='0' y1='0' x2='0' y2='1'%3E%3Cstop offset='0%25' stop-color='%23000' stop-opacity='0.04'/%3E%3Cstop offset='100%25' stop-color='%23000' stop-opacity='0.01'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath d='M0 200 L0 80 L100 50 L180 95 L260 40 L340 70 L420 30 L500 85 L580 55 L660 75 L740 35 L820 90 L900 60 L980 78 L1060 42 L1140 68 L1200 48 L1200 200 Z' fill='url(%23fade)'/%3E%3C/svg%3E"),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 200' preserveAspectRatio='none'%3E%3Cdefs%3E%3ClinearGradient id='fade2' x1='0' y1='0' x2='0' y2='1'%3E%3Cstop offset='0%25' stop-color='%234A90B8' stop-opacity='0.025'/%3E%3Cstop offset='100%25' stop-color='%234A90B8' stop-opacity='0.005'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath d='M0 200 L0 100 L150 70 L220 110 L320 60 L400 95 L480 50 L560 80 L640 55 L720 90 L800 45 L880 75 L960 58 L1040 85 L1120 52 L1200 70 L1200 200 Z' fill='url(%23fade2)'/%3E%3C/svg%3E"),
+    linear-gradient(to bottom, var(--color-background), var(--color-surface-container-low));
+  background-position:
+    bottom -10px left 0,
+    bottom -20px left 100px,
+    center;
+  background-size:
+    100% 180px,
+    100% 160px,
+    100% 100%;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+
+/* === Floating Clouds === */
+@keyframes cloud-float {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+.cloud-layer {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  z-index: 9999;
+  opacity: 0.04;
+}
+.cloud-layer::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 120px 50px at 8% 12%, var(--color-primary) 0%, transparent 100%),
+    radial-gradient(ellipse 150px 45px at 28% 22%, var(--color-primary) 0%, transparent 100%),
+    radial-gradient(ellipse 100px 40px at 52% 8%, var(--color-primary) 0%, transparent 100%),
+    radial-gradient(ellipse 130px 48px at 72% 18%, var(--color-primary) 0%, transparent 100%),
+    radial-gradient(ellipse 90px 35px at 88% 10%, var(--color-primary) 0%, transparent 100%),
+    radial-gradient(ellipse 110px 42px at 12% 32%, var(--color-primary) 0%, transparent 100%),
+    radial-gradient(ellipse 100px 35px at 42% 15%, var(--color-primary) 0%, transparent 100%),
+    radial-gradient(ellipse 140px 45px at 62% 25%, var(--color-primary) 0%, transparent 100%),
+    radial-gradient(ellipse 80px 30px at 82% 12%, var(--color-primary) 0%, transparent 100%);
+  filter: blur(40px);
+  animation: cloud-float 80s linear infinite;
+}
+
+/* === Wind Lines === */
+@keyframes wind-drift {
+  0% { transform: translateX(0) translateY(0); opacity: 0.03; }
+  50% { opacity: 0.04; }
+  100% { transform: translateX(300px) translateY(-40px); opacity: 0; }
+}
+.wind-lines {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  z-index: 9998;
+}
+.wind-line {
+  position: absolute;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--color-primary), transparent);
+  animation: wind-drift 15s ease-in-out infinite;
+}
+.wind-line:nth-child(1) { top: 18%; left: 5%; width: 140px; animation-delay: 0s; animation-duration: 18s; }
+.wind-line:nth-child(2) { top: 32%; left: 55%; width: 100px; animation-delay: 4s; animation-duration: 14s; }
+.wind-line:nth-child(3) { top: 50%; left: 25%; width: 120px; animation-delay: 8s; animation-duration: 16s; }
+.wind-line:nth-child(4) { top: 68%; left: 65%; width: 80px; animation-delay: 2s; animation-duration: 12s; }
+.wind-line:nth-child(5) { top: 14%; left: 75%; width: 110px; animation-delay: 6s; animation-duration: 20s; }

@@ -1,0 +1,8 @@
+ALTER TABLE activities
+  ADD COLUMN IF NOT EXISTS source_reason TEXT DEFAULT '',
+  ADD COLUMN IF NOT EXISTS opening_hours TEXT DEFAULT '',
+  ADD COLUMN IF NOT EXISTS recommended_duration INT DEFAULT 60,
+  ADD COLUMN IF NOT EXISTS travel_minutes_from_prev INT,
+  ADD COLUMN IF NOT EXISTS booking_required BOOLEAN NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS weather_fit TEXT NOT NULL DEFAULT 'any',
+  ADD COLUMN IF NOT EXISTS ticket_reference TEXT DEFAULT '';
