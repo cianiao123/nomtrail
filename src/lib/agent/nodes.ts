@@ -13,6 +13,14 @@ import {
   fetchXHSNote,
   searchTravelInspiration,
 } from "./tools";
+import {
+  appendMissingWishlistActivities,
+  extractWishlistNamesFromContext,
+  isWishlistActivity,
+  markWishlistSource,
+  mergeWishlistCandidates,
+  normalizeWishlistName,
+} from "./wishlist";
 import type { TravelAgentState } from "./state";
 import {
   IntentResultSchema,
@@ -101,38 +109,8 @@ function normalizeGeneratedActivityType(value: unknown): ActivityType {
   return "attraction";
 }
 
-function normalizePlaceName(name: string) {
-  return name
-    .replace(/[（(].*?[）)]/g, "")
-    .replace(/\s+/g, "")
-    .replace(/[·・,，。.\-—_]/g, "")
-    .toLowerCase();
-}
-
 function extractWishlistNames(state: TravelAgentState) {
-  const context = buildConversationContext(state);
-  const match = context.match(/心愿地点加入行程[:：]([^\n。]+)/);
-  if (!match?.[1]) return [];
-
-  return match[1]
-    .split(/[、,，]/)
-    .map((name) => name.trim())
-    .filter(Boolean);
-}
-
-function isWishlistActivity(activityName: string, wishlistNames: string[]) {
-  const normalizedActivityName = normalizePlaceName(activityName);
-  return wishlistNames.some((wishlistName) => {
-    const normalizedWishlistName = normalizePlaceName(wishlistName);
-    return normalizedWishlistName
-      && (normalizedActivityName.includes(normalizedWishlistName)
-        || normalizedWishlistName.includes(normalizedActivityName));
-  });
-}
-
-function markWishlistSource(sourceReason: string | undefined) {
-  const value = sourceReason ?? "";
-  return value.includes("心愿地") ? value : `[心愿地]${value ? ` ${value}` : ""}`;
+  return extractWishlistNamesFromContext(buildConversationContext(state));
 }
 
 function cloneDay(day: Day): Day {
@@ -403,10 +381,12 @@ function buildFastItineraryDraft({
       name: candidate.name,
       category: candidate.category,
       reason: candidate.reason,
-      sourceReason: "来自已提炼候选地点",
+      sourceReason: candidate.sourceRefs?.includes("探索页心愿池")
+        ? "[心愿地] 来自探索页心愿池"
+        : "来自已提炼候选地点",
     })),
   ].filter((item) => {
-    const key = normalizePlaceName(item.name);
+    const key = normalizeWishlistName(item.name);
     if (!key || seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -426,7 +406,7 @@ function buildFastItineraryDraft({
     const template = genericTemplates[fallbackIndex % genericTemplates.length]!;
     const round = Math.floor(fallbackIndex / genericTemplates.length) + 1;
     const name = `${destination}${template.suffix}${round > 1 ? ` ${round}` : ""}`;
-    const key = normalizePlaceName(name);
+    const key = normalizeWishlistName(name);
     fallbackIndex += 1;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -1318,9 +1298,10 @@ export async function generateItineraryNode(
   }
 
   const places = state.confirmedPlaces ?? [];
-  const savedCandidates = (state.selectedSavedPlaces?.length
+  const wishlistNames = extractWishlistNames(state);
+  const savedCandidates = mergeWishlistCandidates(wishlistNames, destination, (state.selectedSavedPlaces?.length
     ? state.selectedSavedPlaces
-    : state.savedPlaceCandidates) ?? [];
+    : state.savedPlaceCandidates) ?? []);
   const mustGo = places.filter((p) => p.priority === "must_go" || p.priority === "want_to_go");
   const optional = places.filter((p) => p.priority === "optional");
 
@@ -1334,10 +1315,10 @@ export async function generateItineraryNode(
     const mappedMustGo = savedCandidates.filter((p) => p.priorityTag === "must_go" || p.priorityTag === "food_candidate");
     const mappedOptional = savedCandidates.filter((p) => p.priorityTag !== "must_go" && p.priorityTag !== "food_candidate");
     mustGoStr = mappedMustGo
-      .map((p) => `- ${p.name} (${p.category}): ${p.reason}${p.openingHours ? `；开放时间参考：${p.openingHours}` : ""}`)
+      .map((p) => `- ${p.sourceRefs?.includes("探索页心愿池") ? "[心愿地] " : ""}${p.name} (${p.category}): ${p.reason}${p.openingHours ? `；开放时间参考：${p.openingHours}` : ""}`)
       .join("\n");
     optionalStr = mappedOptional
-      .map((p) => `- ${p.name} (${p.category}): ${p.reason}`)
+      .map((p) => `- ${p.sourceRefs?.includes("探索页心愿池") ? "[心愿地] " : ""}${p.name} (${p.category}): ${p.reason}`)
       .join("\n") || "无";
     inspirationSummary = (state.inspirationItems ?? [])
       .slice(0, 4)
@@ -1444,10 +1425,8 @@ export async function generateItineraryNode(
     }
 
     validated = fitGeneratedCostsToBudget(validated, budgetMin, budgetMax);
-    const wishlistNames = extractWishlistNames(state);
-
     // Convert to Day[] shape compatible with existing Trip type
-    const days: Day[] = validated.days.map((d) => ({
+    const generatedDays: Day[] = validated.days.map((d) => ({
       id: `${state.threadId}-day-${d.dayIndex}`,
       tripId: state.tripId ?? "",
       dayIndex: d.dayIndex,
@@ -1481,6 +1460,11 @@ export async function generateItineraryNode(
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     }));
+    const days = appendMissingWishlistActivities(
+      generatedDays,
+      wishlistNames,
+      state.threadId
+    );
 
     const summary = validated.days
       .map((d) => `Day ${d.dayIndex}: ${d.theme ?? ""} (${d.activities.length}个活动)`)
@@ -1538,7 +1522,7 @@ export async function generateItineraryNode(
         };
       }
       const wishlistNames = extractWishlistNames(state);
-      const days: Day[] = fallbackDraft.days.map((d) => ({
+      const fallbackDays: Day[] = fallbackDraft.days.map((d) => ({
         id: `${state.threadId}-day-${d.dayIndex}`,
         tripId: state.tripId ?? "",
         dayIndex: d.dayIndex,
@@ -1572,6 +1556,11 @@ export async function generateItineraryNode(
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       }));
+      const days = appendMissingWishlistActivities(
+        fallbackDays,
+        wishlistNames,
+        state.threadId
+      );
       const summary = fallbackDraft.days
         .map((d) => `Day ${d.dayIndex}: ${d.theme ?? ""} (${d.activities.length}个活动)`)
         .join("\n");

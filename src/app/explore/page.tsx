@@ -478,10 +478,10 @@ export default function ExplorePage() {
         ) : (
           <>
             <div ref={containerRef} className="w-full h-full" />
-            <div className="absolute left-5 top-5 z-[1000] rounded-xl border border-outline-variant/55 bg-[rgba(247,251,255,0.84)] px-4 py-2.5 shadow-[0_12px_26px_rgba(8,35,69,0.10)] backdrop-blur">
+            <div className="absolute left-5 top-5 z-10 rounded-xl border border-outline-variant/55 bg-[rgba(247,251,255,0.84)] px-4 py-2.5 shadow-[0_12px_26px_rgba(8,35,69,0.10)] backdrop-blur">
               <h2 className="font-display text-[1.45rem] leading-none text-primary">{selectedCity.name}</h2>
             </div>
-            <div className="absolute right-4 top-4 z-[1000] flex flex-col gap-0.5 rounded-[18px] border border-outline-variant/60 bg-[rgba(247,251,255,0.9)] p-1 shadow-[0_10px_28px_rgba(8,35,69,0.10)] backdrop-blur-[12px]">
+            <div className="absolute right-4 top-4 z-10 flex flex-col gap-0.5 rounded-[18px] border border-outline-variant/60 bg-[rgba(247,251,255,0.9)] p-1 shadow-[0_10px_28px_rgba(8,35,69,0.10)] backdrop-blur-[12px]">
               <button
                 onClick={() => mapRef.current?.zoomIn()}
                 className="flex h-9 w-9 items-center justify-center rounded-xl text-on-surface-variant transition-colors hover:bg-primary-fixed/50 hover:text-primary"
@@ -543,18 +543,15 @@ export default function ExplorePage() {
       {showWishlist && (
         <>
           <div
-            className="fixed inset-0 z-40 bg-black/24 backdrop-blur-[2px]"
+            className="fixed inset-0 z-[1100] bg-black/24 backdrop-blur-[2px]"
             onClick={() => setShowWishlist(false)}
           />
-          <aside className="fixed inset-y-0 right-0 z-50 flex w-full max-w-[460px] flex-col border-l border-outline-variant/60 bg-[rgba(247,251,255,0.96)] shadow-[-24px_0_70px_rgba(8,35,69,0.16)] backdrop-blur-2xl">
+          <aside className="fixed inset-y-0 right-0 z-[1110] flex w-full max-w-[460px] flex-col border-l border-outline-variant/60 bg-[rgba(247,251,255,0.96)] shadow-[-24px_0_70px_rgba(8,35,69,0.16)] backdrop-blur-2xl">
             <div className="border-b border-outline-variant/60 bg-[linear-gradient(135deg,rgba(15,55,100,0.96),rgba(7,27,51,0.98))] px-6 py-6 text-white">
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <p className="text-[11px] tracking-[0.22em] text-white/58">WISHLIST</p>
                   <h2 className="mt-2 font-display text-[2rem] leading-none text-white">心愿池</h2>
-                  <p className="mt-3 text-sm leading-6 text-white/72">
-                    先收集正在路上的地方，再交给规划页排进一条完整路线。
-                  </p>
                 </div>
                 <button
                   onClick={() => setShowWishlist(false)}

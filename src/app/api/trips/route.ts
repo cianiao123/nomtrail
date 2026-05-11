@@ -27,6 +27,15 @@ export async function GET(req: NextRequest) {
       .in("trip_id", tripIds)
       .order("day_index", { ascending: true });
 
+    const dayIds = (allDays ?? []).map((d: any) => d.id);
+    const { data: allActivities } = dayIds.length > 0
+      ? await supabase
+        .from("activities")
+        .select("*")
+        .in("day_id", dayIds)
+        .order("order", { ascending: true })
+      : { data: [] };
+
     // Map Supabase columns back to frontend Trip shape
     const trips = tripRows.map((t: Record<string, unknown>) => ({
       id: t.id,
@@ -49,7 +58,39 @@ export async function GET(req: NextRequest) {
           dayIndex: d.day_index,
           date: d.date,
           notes: d.notes || "",
-          activities: [],
+          activities: (allActivities ?? [])
+            .filter((a: any) => a.day_id === d.id)
+            .map((a: any) => ({
+              id: a.id,
+              dayId: a.day_id,
+              order: a.order,
+              type: a.type || "attraction",
+              poi: a.poi_name ? {
+                amapId: a.poi_id || "",
+                name: a.poi_name,
+                address: a.poi_address || "",
+                coordinate: { lat: a.poi_lat ?? 0, lng: a.poi_lng ?? 0 },
+                category: a.type || "other",
+                photos: [],
+                openingHours: a.opening_hours || undefined,
+              } : null,
+              customName: a.poi_name || "",
+              startTime: a.start_time || "",
+              endTime: a.end_time || "",
+              durationMinutes: a.duration_minutes ?? 60,
+              estimatedCost: a.estimated_cost ?? 0,
+              notes: a.notes || "",
+              sourceReason: a.source_reason || "",
+              openingHours: a.opening_hours || "",
+              recommendedDuration: a.recommended_duration ?? a.duration_minutes ?? 60,
+              travelMinutesFromPrev: a.travel_minutes_from_prev ?? undefined,
+              bookingRequired: a.booking_required ?? false,
+              weatherFit: a.weather_fit || "any",
+              ticketReference: a.ticket_reference || "",
+              isGenerated: a.is_generated ?? false,
+              createdAt: a.created_at,
+              updatedAt: a.updated_at,
+            })),
           createdAt: d.created_at,
           updatedAt: d.updated_at,
         })),

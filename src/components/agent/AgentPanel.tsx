@@ -135,6 +135,7 @@ export function AgentPanel({ tripId, className, alwaysExpanded }: Props) {
   const handleSSEEvent = useAgentStore((s) => s.handleSSEEvent);
   const confirmPlacesAction = useAgentStore((s) => s.confirmPlaces);
   const rejectPlaces = useAgentStore((s) => s.rejectPlaces);
+  const resetAgent = useAgentStore((s) => s.reset);
   const tripCard = useAgentStore((s) => s.tripCard);
   const questionCard = useAgentStore((s) => s.questionCard);
   const exportPayload = useAgentStore((s) => s.exportPayload);
@@ -148,6 +149,12 @@ export function AgentPanel({ tripId, className, alwaysExpanded }: Props) {
   const userProfile = useUserStore((s) => s.userProfile);
   const [formAnswers, setFormAnswers] = useState<Record<string, string>>({});
   const appliedDraftRef = useRef<string>("");
+
+  useEffect(() => {
+    if (!tripId) return;
+    appliedDraftRef.current = "";
+    resetAgent();
+  }, [tripId, resetAgent]);
 
   const progressPhase = (() => {
     if (!isStreaming) return "complete" as const;

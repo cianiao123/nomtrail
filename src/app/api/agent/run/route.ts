@@ -7,6 +7,7 @@
 import { NextRequest } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { travelAgentGraph } from "@/lib/agent/graph";
+import { createInitialAgentState } from "@/lib/agent/sessionContext";
 import type { TravelAgentState } from "@/lib/agent/state";
 import type { AgentRunRequest, AgentRunSSEEvent } from "@/types/agent";
 
@@ -93,37 +94,18 @@ export async function POST(req: NextRequest) {
       try {
         // Load previous session for multi-turn memory
         const prevState = await loadSession(threadId);
-        const prevHistory = prevState?.conversationHistory ?? [];
-        const conversationHistory = [
-          ...prevHistory,
-          { role: "user" as const, content: message },
-        ];
         const requestStartedAt = Date.now();
         const requestDeadlineAt = requestStartedAt + AGENT_ROUTE_BUDGET_MS;
 
-        const initialState: Partial<TravelAgentState> = {
+        const initialState: Partial<TravelAgentState> = createInitialAgentState({
           threadId,
-          userId: userId || prevState?.userId || "local-user",
+          tripId: tripId ?? prevState?.tripId ?? "",
+          userId,
+          message,
+          prevState,
           requestStartedAt,
           requestDeadlineAt,
-          tripId: tripId ?? prevState?.tripId ?? "",
-          currentMessage: message,
-          conversationHistory,
-          parsedTripRequirements: prevState?.parsedTripRequirements ?? null,
-          missingInfo: prevState?.missingInfo ?? [],
-          parsedPlaces: prevState?.parsedPlaces ?? [],
-          confirmedPlaces: prevState?.confirmedPlaces ?? [],
-          inspirationItems: prevState?.inspirationItems ?? [],
-          savedPlaceCandidates: prevState?.savedPlaceCandidates ?? [],
-          selectedSavedPlaces: prevState?.selectedSavedPlaces ?? [],
-          itineraryDraft: prevState?.itineraryDraft ?? null,
-          versions: prevState?.versions ?? [],
-          currentVersionNumber: prevState?.currentVersionNumber ?? 0,
-          critiqueResult: prevState?.critiqueResult ?? null,
-          needsHumanConfirmation: false,
-          errors: [],
-          actionLog: [],
-        };
+        });
 
         const progressEvents: Array<{ node: string; message: string }> = [
           { node: "START", message: "正在读取你的旅行需求" },

@@ -483,6 +483,7 @@ function TripDetailContent() {
   const currentTrip = useTripStore((s) => s.currentTrip);
   const loadTrip = useTripStore((s) => s.loadTrip);
   const setCurrentTrip = useTripStore((s) => s.setCurrentTrip);
+  const clearCurrentTrip = useTripStore((s) => s.clearCurrentTrip);
   const saveTrip = useTripStore((s) => s.saveTrip);
   const addActivity = useTripStore((s) => s.addActivity);
   const updateActivity = useTripStore((s) => s.updateActivity);
@@ -518,9 +519,15 @@ function TripDetailContent() {
     let cancelled = false;
     const stored = loadTrip(tripId);
 
-    if (stored && (!currentTrip || currentTrip.id !== tripId)) {
+    if (stored) {
       setCurrentTrip(stored);
-      queueMicrotask(() => setLoadingTrip(false));
+    } else {
+      queueMicrotask(() => {
+        if (!cancelled) setLoadingTrip(true);
+      });
+      if (currentTrip?.id !== tripId) {
+        clearCurrentTrip();
+      }
     }
 
     fetch(`/api/trips/${tripId}`)
@@ -542,7 +549,7 @@ function TripDetailContent() {
     };
   }, [tripId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const trip = currentTrip;
+  const trip = currentTrip?.id === tripId ? currentTrip : null;
   // Generate placeholder days from date range if no days exist yet
   const displayDays = (trip?.days?.length ?? 0) > 0
     ? trip!.days
@@ -636,7 +643,7 @@ function TripDetailContent() {
     setAddingToDay(null);
   };
 
-  if (loadingTrip) {
+  if (!trip && loadingTrip) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
         <div className="text-center animate-pulse">
