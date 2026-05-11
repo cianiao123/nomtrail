@@ -20,10 +20,13 @@ interface Props {
 
 const STEP_LABELS: Record<string, string> = {
   START: "准备中",
+  parse_trip: "正在分析旅行需求",
   research_inspiration: "正在搜索种草攻略",
   extract_places: "正在提炼地点",
+  budget_check: "正在校验预算",
   generate_itinerary: "正在生成行程",
   critique_itinerary: "正在校验真实信息",
+  save_version: "正在保存行程",
   confirm_places: "正在确认并继续生成",
 };
 
@@ -150,8 +153,10 @@ export function AgentPanel({ tripId, className, alwaysExpanded }: Props) {
     if (!isStreaming) return "complete" as const;
     if (currentStep === "research_inspiration") return "research_inspiration" as const;
     if (currentStep === "extract_places") return "extract_places" as const;
+    if (currentStep === "budget_check") return "budget_check" as const;
     if (currentStep === "critique_itinerary") return "critique_itinerary" as const;
     if (currentStep === "generate_itinerary") return "generate_itinerary" as const;
+    if (currentStep === "save_version") return "save_version" as const;
     if (currentStep === "confirm_places") return "confirm" as const;
     return "parse" as const;
   })();
@@ -159,8 +164,10 @@ export function AgentPanel({ tripId, className, alwaysExpanded }: Props) {
   const insightLines = [
     inspirationItems.length > 0 ? `已汇总 ${inspirationItems.length} 条攻略摘要` : "",
     savedPlaceCandidates.length > 0 ? `已提炼 ${savedPlaceCandidates.length} 个候选地点` : "",
+    currentStep === "budget_check" ? "正在确保活动预估费用落在预算区间内" : "",
     currentStep === "critique_itinerary" ? "正在检查时间、路线、预算和天气适配" : "",
     currentStep === "generate_itinerary" ? "正在根据候选地点池生成每日安排" : "",
+    currentStep === "save_version" ? "正在把结果写入行程并生成可查看卡片" : "",
   ].filter(Boolean);
 
   // Auto scroll

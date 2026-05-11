@@ -10,7 +10,9 @@ import type { AgentRunSSEEvent, AgentConfirmRequest, ConfirmedPlace } from "@/ty
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 300;
+
+const AGENT_ROUTE_BUDGET_MS = (maxDuration - 8) * 1000;
 
 function getSupabase() {
   return createClient(
@@ -70,6 +72,10 @@ export async function POST(req: NextRequest) {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(e)}\n\n`));
       };
       try {
+        const requestStartedAt = Date.now();
+        savedState.requestStartedAt = requestStartedAt;
+        savedState.requestDeadlineAt = requestStartedAt + AGENT_ROUTE_BUDGET_MS;
+
         emit({ type: "step", node: "confirm_places", message: "Resuming..." });
         emit({
           type: "step",

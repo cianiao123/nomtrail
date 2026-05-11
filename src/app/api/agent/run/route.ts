@@ -12,7 +12,9 @@ import type { AgentRunRequest, AgentRunSSEEvent } from "@/types/agent";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 300;
+
+const AGENT_ROUTE_BUDGET_MS = (maxDuration - 8) * 1000;
 
 function getSupabase() {
   return createClient(
@@ -86,6 +88,8 @@ export async function POST(req: NextRequest) {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
       };
 
+      let progressTimer: ReturnType<typeof setInterval> | null = null;
+
       try {
         // Load previous session for multi-turn memory
         const prevState = await loadSession(threadId);
@@ -94,10 +98,14 @@ export async function POST(req: NextRequest) {
           ...prevHistory,
           { role: "user" as const, content: message },
         ];
+        const requestStartedAt = Date.now();
+        const requestDeadlineAt = requestStartedAt + AGENT_ROUTE_BUDGET_MS;
 
         const initialState: Partial<TravelAgentState> = {
           threadId,
           userId: userId || prevState?.userId || "local-user",
+          requestStartedAt,
+          requestDeadlineAt,
           tripId: tripId ?? prevState?.tripId ?? "",
           currentMessage: message,
           conversationHistory,
@@ -117,14 +125,28 @@ export async function POST(req: NextRequest) {
           actionLog: [],
         };
 
-        emit({ type: "step", node: "START", message: "Agent started" });
-        if (/想去|计划|安排|规划|生成|开始/.test(message)) {
-          emit({ type: "step", node: "research_inspiration", message: "正在搜索种草攻略..." });
-        }
+        const progressEvents: Array<{ node: string; message: string }> = [
+          { node: "START", message: "正在读取你的旅行需求" },
+          { node: "parse_trip", message: "正在确认目的地、天数、人数和预算" },
+          { node: "research_inspiration", message: "正在搜索攻略与种草内容" },
+          { node: "extract_places", message: "正在把攻略整理成候选地点池" },
+          { node: "budget_check", message: "正在按预算区间校准活动费用" },
+          { node: "generate_itinerary", message: "正在生成每日行程安排" },
+        ];
+        let progressIndex = 0;
+        emit({ type: "step", ...progressEvents[progressIndex] });
+        progressTimer = setInterval(() => {
+          progressIndex = Math.min(progressIndex + 1, progressEvents.length - 1);
+          emit({ type: "step", ...progressEvents[progressIndex] });
+        }, 3500);
 
         const result = (await travelAgentGraph.invoke(initialState, {
           configurable: { thread_id: threadId },
         })) as TravelAgentState;
+        if (progressTimer) {
+          clearInterval(progressTimer);
+          progressTimer = null;
+        }
 
         // Human-in-the-loop checkpoint
         if (result.needsHumanConfirmation) {
@@ -205,6 +227,10 @@ export async function POST(req: NextRequest) {
           },
         });
       } catch (err) {
+        if (progressTimer) {
+          clearInterval(progressTimer);
+          progressTimer = null;
+        }
         emit({
           type: "error",
           message: `Agent execution failed: ${(err as Error).message}`,

@@ -105,8 +105,10 @@ function routeAfterCollectMissing(state: TravelAgentState): string {
   return END;
 }
 
-function routeAfterGenerate(): string {
-  return shouldSkipPostGenerationChecks() ? "save_version" : "normalize_activities";
+function routeAfterGenerate(state: TravelAgentState): string {
+  const deadline = state.requestDeadlineAt;
+  const remaining = typeof deadline === "number" ? deadline - Date.now() : 60000;
+  return shouldSkipPostGenerationChecks() || remaining < 12000 ? "save_version" : "normalize_activities";
 }
 
 function routeAfterSave(state: TravelAgentState): string {

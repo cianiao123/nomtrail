@@ -41,6 +41,7 @@ export const deepseekClient: LLMClient = {
       temperature: options?.temperature ?? 0.2,
       maxTokens: options?.maxTokens ?? 4096,
       responseFormat: "json_object",
+      signal: options?.signal,
     });
 
     try {
@@ -65,6 +66,7 @@ export const deepseekClient: LLMClient = {
     return chatCompletion(messages, {
       temperature: options?.temperature ?? 0.7,
       maxTokens: options?.maxTokens ?? 4096,
+      signal: options?.signal,
     });
   },
 
@@ -78,6 +80,7 @@ export const deepseekClient: LLMClient = {
 
     const res = await fetch(`${DEEPSEEK_ANTHROPIC_BASE}/messages`, {
       method: "POST",
+      signal: options?.signal,
       headers: {
         "x-api-key": apiKey,
         "Content-Type": "application/json",

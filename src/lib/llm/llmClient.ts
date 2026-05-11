@@ -8,6 +8,7 @@ export interface LLMMessage {
 export interface LLMGenerateOptions {
   temperature?: number;
   maxTokens?: number;
+  signal?: AbortSignal;
 }
 
 export interface LLMJsonOptions extends LLMGenerateOptions {

@@ -46,6 +46,8 @@ import type {
   ItineraryVersion,
   AgentActionLogEntry,
   CritiqueResult,
+  SavedPlaceCandidate,
+  ConfirmedPlace,
 } from "@/types/agent";
 import type { Trip, Day, ActivityType } from "@/types/trip";
 
@@ -86,6 +88,17 @@ function normalizeWeatherFit(
   if (["indoor", "inside"].includes(normalized)) return "indoor";
   if (["night", "evening"].includes(normalized)) return "night";
   return "any";
+}
+
+function normalizeGeneratedActivityType(value: unknown): ActivityType {
+  const normalized = String(value || "").toLowerCase().trim();
+  if (["food", "restaurant", "meal", "dining", "cafe", "coffee", "snack"].includes(normalized)) {
+    return "food";
+  }
+  if (["hotel"].includes(normalized)) return "hotel";
+  if (["transport", "transfer", "transit", "traffic"].includes(normalized)) return "transport";
+  if (["other"].includes(normalized)) return "other";
+  return "attraction";
 }
 
 function normalizePlaceName(name: string) {
@@ -180,13 +193,96 @@ function normalizeParsedBudget(
   return { min, max };
 }
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) => {
-      setTimeout(() => reject(new Error(message)), timeoutMs);
-    }),
-  ]);
+function parseBudgetFromMessage(message: string): { min: number; max: number } | undefined {
+  const text = message
+    .replace(/,/g, "")
+    .replace(/[￥¥]/g, "")
+    .replace(/\s+/g, "");
+
+  if (/预算[:：]?不限|不限预算|预算不限/.test(text)) return undefined;
+
+  const rangeMatch = text.match(/(\d+)(?:元|块|rmb|cny)?(?:-|~|到|至|—)(\d+)(?:元|块|rmb|cny)?/i);
+  if (rangeMatch) {
+    const min = Number(rangeMatch[1]);
+    const max = Number(rangeMatch[2]);
+    if (Number.isFinite(min) && Number.isFinite(max)) {
+      return { min: Math.min(min, max), max: Math.max(min, max) };
+    }
+  }
+
+  const underMatch = text.match(/(\d+)(?:元|块|rmb|cny)?(?:以下|以内|内|以下预算|以内预算)/i);
+  if (underMatch) {
+    const max = Number(underMatch[1]);
+    if (Number.isFinite(max)) return { min: 0, max };
+  }
+
+  const budgetUnderMatch = text.match(/预算[:：]?(\d+)(?:元|块|rmb|cny)?(?:以下|以内|内)?/i);
+  if (budgetUnderMatch && /以下|以内|内/.test(text)) {
+    const max = Number(budgetUnderMatch[1]);
+    if (Number.isFinite(max)) return { min: 0, max };
+  }
+
+  return undefined;
+}
+
+function formatBudget(budget?: { min?: number | null; max?: number | null } | null): string {
+  if (!budget || typeof budget.max !== "number") return "不限";
+  const min = typeof budget.min === "number" ? budget.min : 0;
+  if (min <= 0) return `¥${budget.max}以下`;
+  return `¥${min}-${budget.max}`;
+}
+
+function hasExplicitTravelerCount(message: string): boolean {
+  const text = message.replace(/\s+/g, "");
+  return /(?:\d+|[一二两三四五六七八九十])(?:个)?(?:人|成人|大人|小孩|孩子|儿童|宝宝)|一家(?:三|四|五|六|七|八|九|十|\d)口|情侣|夫妻|两口子|双人|单人/.test(text);
+}
+
+function createTimeoutSignal(timeoutMs: number): AbortSignal {
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), timeoutMs);
+  return controller.signal;
+}
+
+function remainingRequestMs(state: TravelAgentState): number {
+  const deadline = state.requestDeadlineAt;
+  return typeof deadline === "number" ? Math.max(0, deadline - Date.now()) : 60000;
+}
+
+function boundedTimeoutSignal(
+  state: TravelAgentState,
+  desiredMs: number,
+  reserveMs = 4000
+): AbortSignal {
+  const remaining = remainingRequestMs(state);
+  return createTimeoutSignal(Math.max(1000, Math.min(desiredMs, remaining - reserveMs)));
+}
+
+function itineraryMaxTokens(dayCount: number): number {
+  const base = process.env.VERCEL === "1" ? 1600 : 2400;
+  const perDay = process.env.VERCEL === "1" ? 450 : 650;
+  return Math.min(process.env.VERCEL === "1" ? 3200 : 5200, base + dayCount * perDay);
+}
+
+function itineraryCompletenessIssue(
+  days: { dayIndex: number; activities: unknown[] }[],
+  dayCount: number
+): string | null {
+  if (days.length !== dayCount) {
+    return `行程天数不匹配：需要 ${dayCount} 天，实际生成 ${days.length} 天`;
+  }
+
+  const incompleteDay = days.find((day) => day.activities.length < 2);
+  if (incompleteDay) {
+    return `第 ${incompleteDay.dayIndex} 天活动不足：至少需要 2 个活动，实际 ${incompleteDay.activities.length} 个`;
+  }
+
+  return null;
+}
+
+function isAbortError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return err instanceof DOMException && err.name === "AbortError"
+    || /abort|aborted|operation was aborted/i.test(message);
 }
 
 function estimateGeneratedCost(
@@ -199,6 +295,202 @@ function estimateGeneratedCost(
     ),
     0
   );
+}
+
+function fitGeneratedCostsToBudget<
+  T extends {
+    budgetSummary?: Record<string, number>;
+    overallTips?: string;
+    days: {
+      activities: {
+        estimatedCost?: number;
+        notes?: string;
+      }[];
+    }[];
+  },
+>(draft: T, budgetMin: number, budgetMax: number): T {
+  if (budgetMax <= 0) return draft;
+
+  const currentTotal = estimateGeneratedCost(draft.days);
+  const lowerBound = Math.max(0, Math.min(budgetMin, budgetMax));
+  const upperBound = Math.max(lowerBound, budgetMax);
+  if (currentTotal >= lowerBound && currentTotal <= upperBound) {
+    return {
+      ...draft,
+      budgetSummary: {
+        ...(draft.budgetSummary ?? {}),
+        totalEstimated: currentTotal,
+        budgetMin: lowerBound,
+        budgetMax: upperBound,
+      },
+    };
+  }
+
+  const targetTotal = currentTotal > upperBound ? upperBound : lowerBound;
+  const activities = draft.days.flatMap((day) => day.activities);
+  if (activities.length === 0) return draft;
+  const ratio = currentTotal > 0 ? targetTotal / currentTotal : 0;
+  let runningTotal = 0;
+  let remainingAdjustable = activities.length;
+
+  const days = draft.days.map((day) => ({
+    ...day,
+    activities: day.activities.map((activity) => {
+      const originalCost = activity.estimatedCost ?? 0;
+      remainingAdjustable -= 1;
+      const adjustedCost = remainingAdjustable === 0
+        ? Math.max(0, targetTotal - runningTotal)
+        : currentTotal > 0
+          ? Math.max(0, Math.round((originalCost * ratio) / 10) * 10)
+          : Math.max(0, Math.floor((targetTotal / activities.length) / 10) * 10);
+      runningTotal += adjustedCost;
+      return {
+        ...activity,
+        estimatedCost: adjustedCost,
+      };
+    }),
+  }));
+  const totalEstimated = estimateGeneratedCost(days);
+
+  return {
+    ...draft,
+    days,
+    budgetSummary: {
+      ...(draft.budgetSummary ?? {}),
+      totalEstimated,
+      budgetMin: lowerBound,
+      budgetMax: upperBound,
+      adjustedFrom: currentTotal,
+    },
+    overallTips: draft.overallTips?.includes("已按预算区间")
+      ? draft.overallTips
+      : `${draft.overallTips ? `${draft.overallTips}\n` : ""}已按预算区间 ${lowerBound}-${upperBound} CNY 调整活动预估费用，实际消费请以现场价格为准。`,
+  };
+}
+
+function dateForDay(startDate: string, dayIndex: number): string {
+  return new Date(new Date(startDate).getTime() + (dayIndex - 1) * 86400000)
+    .toISOString()
+    .slice(0, 10);
+}
+
+function buildFastItineraryDraft({
+  destination,
+  startDate,
+  dayCount,
+  savedCandidates,
+  confirmedPlaces,
+  budgetMin,
+  budgetMax,
+}: {
+  destination: string;
+  startDate: string;
+  dayCount: number;
+  savedCandidates: SavedPlaceCandidate[];
+  confirmedPlaces: ConfirmedPlace[];
+  budgetMin: number;
+  budgetMax: number;
+}) {
+  const seen = new Set<string>();
+  let candidatePool = [
+    ...confirmedPlaces.map((place) => ({
+      name: place.name,
+      category: place.category,
+      reason: place.notes || "用户提到的地点",
+      sourceReason: "来自用户确认地点",
+    })),
+    ...savedCandidates.map((candidate) => ({
+      name: candidate.name,
+      category: candidate.category,
+      reason: candidate.reason,
+      sourceReason: "来自已提炼候选地点",
+    })),
+  ].filter((item) => {
+    const key = normalizePlaceName(item.name);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  const usedGenericFallback = candidatePool.length < dayCount * 2;
+
+  const genericTemplates = [
+    { suffix: "经典地标", category: "attraction", reason: "模型生成超时，先安排城市经典地标段，具体地点可继续让 AI 替换。" },
+    { suffix: "美食街区", category: "food", reason: "模型生成超时，先保留美食探索时段，建议后续补充具体餐厅。" },
+    { suffix: "购物街区", category: "other", reason: "模型生成超时，先保留购物逛街时段，后续可替换为商场或街区。" },
+    { suffix: "城市漫步区", category: "attraction", reason: "模型生成超时，先保留轻松步行游览时段，具体路线可继续微调。" },
+    { suffix: "夜间活动区", category: "other", reason: "模型生成超时，先保留晚间活动时段，建议出发前确认营业时间。" },
+    { suffix: "室内备选点", category: "attraction", reason: "模型生成超时，先安排室内备选，适合雨天或体力不足时替换。" },
+  ] as const;
+  let fallbackIndex = 0;
+  while (candidatePool.length < dayCount * 2) {
+    const template = genericTemplates[fallbackIndex % genericTemplates.length]!;
+    const round = Math.floor(fallbackIndex / genericTemplates.length) + 1;
+    const name = `${destination}${template.suffix}${round > 1 ? ` ${round}` : ""}`;
+    const key = normalizePlaceName(name);
+    fallbackIndex += 1;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    candidatePool = [
+      ...candidatePool,
+      {
+        name,
+        category: template.category,
+        reason: template.reason,
+        sourceReason: "来自快速兜底模板",
+      },
+    ];
+  }
+
+  const timeSlots = [
+    { start: "09:30", end: "11:30" },
+    { start: "12:00", end: "13:30" },
+    { start: "15:00", end: "17:00" },
+  ];
+
+  let cursor = 0;
+  const days = Array.from({ length: dayCount }, (_, dayOffset) => {
+    const dayCandidates = candidatePool.slice(cursor, cursor + 2);
+    cursor += dayCandidates.length;
+    const activities = dayCandidates.map((picked, index) => {
+      const slot = timeSlots[index] ?? timeSlots.at(-1)!;
+      const type = normalizeGeneratedActivityType(picked.category);
+      return {
+        order: index + 1,
+        type,
+        name: picked.name,
+        startTime: slot.start,
+        endTime: slot.end,
+        durationMinutes: type === "food" ? 90 : 120,
+        estimatedCost: type === "food" ? 80 : type === "transport" ? 30 : 50,
+        notes: picked.reason || "根据已获取的信息快速安排，建议出发前确认细节。",
+        sourceReason: picked.sourceReason,
+        bookingRequired: false,
+        openingHours: undefined,
+        recommendedDuration: type === "food" ? 90 : 120,
+        ticketReference: undefined,
+        travelMinutesFromPrev: index === 0 ? undefined : 20,
+        weatherFit: "any",
+      };
+    });
+
+    return {
+      dayIndex: dayOffset + 1,
+      date: dateForDay(startDate, dayOffset + 1),
+      theme: `${destination}第 ${dayOffset + 1} 天`,
+      activities,
+      notes: usedGenericFallback
+        ? "主生成耗时较长，已先生成可编辑骨架；具体地点、餐厅和开放时间建议继续让 AI 替换确认。"
+        : "基于已提炼候选地点生成，可继续让 AI 微调节奏。",
+    };
+  });
+
+  return fitGeneratedCostsToBudget({
+    days,
+    overallTips: usedGenericFallback
+      ? `主生成耗时较长，已先生成一版可编辑行程骨架。部分地点是占位类型，请继续补充想去的地点或让 AI 替换为具体 POI。预算已控制在 ${budgetMin}-${budgetMax} CNY 区间内。`
+      : `主生成耗时较长，已先使用真实候选地点生成可编辑版本。预算已控制在 ${budgetMin}-${budgetMax} CNY 区间内。`,
+    budgetSummary: {},
+  }, budgetMin, budgetMax);
 }
 
 function extractPlaceToAdd(message: string): string | null {
@@ -666,7 +958,7 @@ export async function classifyIntentNode(
       .replace("{missingInfo}", (state.missingInfo ?? []).join(", ") || "无")
       .replace("{userMessage}", msg);
 
-    let parsed = await deepseekClient.generateJson(
+    const parsed = await deepseekClient.generateJson(
       [
         { role: "system", content: "意图分类。只输出JSON。" },
         { role: "user", content: prompt },
@@ -769,7 +1061,7 @@ export async function recommendDestinationsNode(
       state.currentMessage ?? ""
     );
 
-    let parsed = await deepseekClient.generateJson(
+    const parsed = await deepseekClient.generateJson(
       [
         { role: "system", content: "你是旅行目的地推荐顾问。只输出合法 JSON。" },
         { role: "user", content: prompt },
@@ -883,7 +1175,7 @@ export async function parsePlacesNode(
   try {
     const prompt = PARSE_PLACES_PROMPT.replace("{userMessage}", msg);
 
-    let parsed = await deepseekClient.generateJson(
+    const parsed = await deepseekClient.generateJson(
       [
         {
           role: "system",
@@ -966,11 +1258,7 @@ export async function researchInspirationNode(
   }
 
   try {
-    const result = await withTimeout(
-      searchTravelInspiration(destination, preferences, dayCount),
-      process.env.VERCEL === "1" ? 22000 : 45000,
-      "攻略搜索超时"
-    );
+    const result = await searchTravelInspiration(destination, preferences, dayCount);
     const candidateContext = result.savedPlaceCandidates
       .slice(0, 8)
       .map((candidate) => `${candidate.name}(${candidate.priorityTag})`)
@@ -1064,12 +1352,18 @@ export async function generateItineraryNode(
   }
 
   try {
-    // Web search for real-time info about destination
+    // Web search for real-time info about destination. On Vercel, keep this
+    // lightweight because the inspiration step has already performed web search.
     let enrichedContext = "";
     try {
-      const destPlace = { name: destination, category: "attraction" as const, priority: "want_to_go" as const, sourceText: destination, id: "", estimatedDuration: 60 };
-      const results = await searchMultiplePlaces([destPlace], 1);
-      enrichedContext = buildEnrichedContext(results);
+      const hasInspirationContext =
+        (state.inspirationItems?.length ?? 0) > 0
+        || savedCandidates.length > 0;
+      if (!(process.env.VERCEL === "1" && hasInspirationContext)) {
+        const destPlace = { name: destination, category: "attraction" as const, priority: "want_to_go" as const, sourceText: destination, id: "", estimatedDuration: 60 };
+        const results = await searchMultiplePlaces([destPlace], 1);
+        enrichedContext = buildEnrichedContext(results);
+      }
     } catch { /* skip if unavailable */ }
 
     const prompt = ITINERARY_AGENT_PROMPT
@@ -1088,6 +1382,8 @@ export async function generateItineraryNode(
       .replace("{inspirationSummary}", inspirationSummary || "无")
       .replace("{enrichedContext}", enrichedContext || "无实时数据");
 
+    const maxTokens = itineraryMaxTokens(dayCount);
+    const generationTimeoutMs = 90000;
     let parsed = await deepseekClient.generateJson(
       [
         {
@@ -1097,7 +1393,11 @@ export async function generateItineraryNode(
         },
         { role: "user", content: prompt },
       ],
-      { temperature: 0.3, maxTokens: 4096 }
+      {
+        temperature: 0.3,
+        maxTokens,
+        signal: boundedTimeoutSignal(state, generationTimeoutMs),
+      }
     );
 
     let validated = validateWithSchema(
@@ -1106,7 +1406,8 @@ export async function generateItineraryNode(
       "generate_itinerary"
     );
 
-    if (validated.days.length !== dayCount) {
+    let completenessIssue = itineraryCompletenessIssue(validated.days, dayCount);
+    if (completenessIssue && remainingRequestMs(state) > 18000) {
       parsed = await deepseekClient.generateJson(
         [
           {
@@ -1117,10 +1418,14 @@ export async function generateItineraryNode(
           {
             role: "user",
             content:
-              `${prompt}\n\n上一次输出了 ${validated.days.length} 天，但本次必须输出完整 ${dayCount} 天。请重新生成，days数组长度必须等于${dayCount}，dayIndex必须从1连续到${dayCount}。`,
+              `${prompt}\n\n上一次输出不完整：${completenessIssue}。请重新生成完整 ${dayCount} 天行程：days数组长度必须等于${dayCount}，dayIndex必须从1连续到${dayCount}，且每天必须有2-4个活动。`,
           },
         ],
-        { temperature: 0.2, maxTokens: 4096 }
+        {
+          temperature: 0.2,
+          maxTokens,
+          signal: boundedTimeoutSignal(state, 45000),
+        }
       );
       validated = validateWithSchema(
         GenerateItineraryResultSchema,
@@ -1129,36 +1434,16 @@ export async function generateItineraryNode(
       );
     }
 
-    if (validated.days.length !== dayCount) {
-      throw new Error(`行程天数不匹配：需要 ${dayCount} 天，实际生成 ${validated.days.length} 天`);
+    completenessIssue = itineraryCompletenessIssue(validated.days, dayCount);
+    if (completenessIssue && remainingRequestMs(state) <= 18000) {
+      throw new DOMException("Itinerary generation deadline reached", "AbortError");
     }
 
-    const estimatedTotal = estimateGeneratedCost(validated.days);
-    if (budgetMax > 0 && estimatedTotal > budgetMax) {
-      parsed = await deepseekClient.generateJson(
-        [
-          {
-            role: "system",
-            content:
-              "你是专业旅行规划师。预算是硬约束。只输出合法JSON。",
-          },
-          {
-            role: "user",
-            content:
-              `${prompt}\n\n上一次输出的活动预估总费用为 ${estimatedTotal} CNY，超过用户预算上限 ${budgetMax} CNY。请重新生成完整 ${dayCount} 天行程，活动 estimatedCost 合计必须 <= ${budgetMax} CNY，并且不能少于 ${budgetMin} CNY 太多；优先免费/低价景点、公共交通和平价餐厅，删除高价餐厅或高价体验。`,
-          },
-        ],
-        { temperature: 0.2, maxTokens: 4096 }
-      );
-      validated = validateWithSchema(
-        GenerateItineraryResultSchema,
-        parsed,
-        "generate_itinerary"
-      );
-      if (validated.days.length !== dayCount) {
-        throw new Error(`行程天数不匹配：需要 ${dayCount} 天，实际生成 ${validated.days.length} 天`);
-      }
+    if (completenessIssue) {
+      throw new Error(completenessIssue);
     }
+
+    validated = fitGeneratedCostsToBudget(validated, budgetMin, budgetMax);
     const wishlistNames = extractWishlistNames(state);
 
     // Convert to Day[] shape compatible with existing Trip type
@@ -1171,7 +1456,7 @@ export async function generateItineraryNode(
         id: `${state.threadId}-act-${d.dayIndex}-${a.order}`,
         dayId: `${state.threadId}-day-${d.dayIndex}`,
         order: a.order,
-        type: a.type === "restaurant" ? "food" : a.type,
+        type: normalizeGeneratedActivityType(a.type),
         poi: null,
         customName: a.name,
         startTime: a.startTime,
@@ -1205,7 +1490,12 @@ export async function generateItineraryNode(
       itineraryDraft: {
         days,
         overallTips: validated.overallTips,
-        budgetSummary: validated.budgetSummary,
+        budgetSummary: {
+          ...(validated.budgetSummary ?? {}),
+          totalEstimated: estimateGeneratedCost(validated.days),
+          budgetMin,
+          budgetMax,
+        },
       },
       assistantMessage: `已为你生成 ${dayCount} 天的行程：\n\n${summary}\n\n${validated.overallTips ?? ""}`,
       actionLog: [
@@ -1219,6 +1509,96 @@ export async function generateItineraryNode(
     };
   } catch (err) {
     const errMsg = (err as Error).message || String(err);
+    if (isAbortError(err)) {
+      const fallbackDraft = buildFastItineraryDraft({
+        destination,
+        startDate,
+        dayCount,
+        savedCandidates,
+        confirmedPlaces: places,
+        budgetMin,
+        budgetMax,
+      });
+      if (!fallbackDraft) {
+        return {
+          errors: [
+            ...(state.errors ?? []),
+            "generate_itinerary aborted: insufficient verified candidates for complete fallback",
+          ],
+          assistantMessage:
+            `生成行程超时了，而且真实候选地点不足以生成完整 ${dayCount} 天行程。我没有保存半成品，请重新点击开始规划，或先补充几个明确想去的地点。`,
+          actionLog: [
+            logAction(
+              state,
+              "generate_itinerary",
+              "abort without fallback candidates",
+              Date.now() - t0
+            ),
+          ],
+        };
+      }
+      const wishlistNames = extractWishlistNames(state);
+      const days: Day[] = fallbackDraft.days.map((d) => ({
+        id: `${state.threadId}-day-${d.dayIndex}`,
+        tripId: state.tripId ?? "",
+        dayIndex: d.dayIndex,
+        date: d.date,
+        activities: d.activities.map((a) => ({
+          id: `${state.threadId}-act-${d.dayIndex}-${a.order}`,
+          dayId: `${state.threadId}-day-${d.dayIndex}`,
+          order: a.order,
+          type: normalizeGeneratedActivityType(a.type),
+          poi: null,
+          customName: a.name,
+          startTime: a.startTime,
+          endTime: a.endTime,
+          durationMinutes: a.durationMinutes,
+          estimatedCost: a.estimatedCost,
+          notes: a.notes,
+          sourceReason: isWishlistActivity(a.name, wishlistNames)
+            ? markWishlistSource(a.sourceReason)
+            : a.sourceReason,
+          bookingRequired: a.bookingRequired,
+          openingHours: a.openingHours,
+          recommendedDuration: a.recommendedDuration,
+          weatherFit: normalizeWeatherFit(a.weatherFit),
+          ticketReference: a.ticketReference ?? undefined,
+          travelMinutesFromPrev: a.travelMinutesFromPrev,
+          isGenerated: true,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        })),
+        notes: d.notes,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }));
+      const summary = fallbackDraft.days
+        .map((d) => `Day ${d.dayIndex}: ${d.theme ?? ""} (${d.activities.length}个活动)`)
+        .join("\n");
+
+      return {
+        itineraryDraft: {
+          days,
+          overallTips: fallbackDraft.overallTips,
+          budgetSummary: {
+            ...(fallbackDraft.budgetSummary ?? {}),
+            totalEstimated: estimateGeneratedCost(fallbackDraft.days),
+            budgetMin,
+            budgetMax,
+          },
+        },
+        assistantMessage: `生成耗时较长，我先为你生成一版快速行程：\n\n${summary}\n\n${fallbackDraft.overallTips ?? ""}`,
+        actionLog: [
+          logAction(
+            state,
+            "generate_itinerary",
+            `fallback after abort: ${dayCount} day itinerary`,
+            Date.now() - t0
+          ),
+        ],
+      };
+    }
+
     return {
       errors: [
         ...(state.errors ?? []),
@@ -1308,7 +1688,7 @@ export async function reviseItineraryNode(
         id: `${state.threadId}-act-${d.dayIndex}-${a.order}-${Date.now()}`,
         dayId: `${state.threadId}-day-${d.dayIndex}`,
         order: a.order,
-        type: a.type === "restaurant" ? "food" : a.type,
+        type: normalizeGeneratedActivityType(a.type),
         poi: null,
         customName: a.name,
         startTime: a.startTime,
@@ -1399,7 +1779,7 @@ export async function normalizeActivitiesNode(
         { role: "system", content: "你是行程数据标准化器。只输出合法JSON。" },
         { role: "user", content: prompt },
       ],
-      { temperature: 0.1, maxTokens: 4096 }
+      { temperature: 0.1, maxTokens: 2048, signal: boundedTimeoutSignal(state, 8000, 2500) }
     );
 
     const v = validateWithSchema(NormalizeActivitiesResultSchema, parsed, "normalize");
@@ -1841,7 +2221,7 @@ export async function critiqueItineraryNode(
         },
         { role: "user", content: prompt },
       ],
-      { temperature: 0.3, maxTokens: 1024 }
+      { temperature: 0.3, maxTokens: 768, signal: boundedTimeoutSignal(state, 8000, 2500) }
     );
 
     const validated = validateWithSchema(
@@ -2050,6 +2430,11 @@ export async function parseTripNode(
     );
 
     const v = validateWithSchema(ParseTripResultSchema, parsed, "parse_trip");
+    const travelersFromLatestMessage = hasExplicitTravelerCount(msg);
+    const nextTravelers = travelersFromLatestMessage
+      ? v.travelers || existing?.travelers
+      : existing?.travelers;
+    const budgetFromLatestMessage = parseBudgetFromMessage(msg);
 
     // Merge with existing requirements (latest values win)
     const merged = {
@@ -2057,8 +2442,8 @@ export async function parseTripNode(
       startDate: v.startDate || existing?.startDate,
       endDate: v.endDate || existing?.endDate,
       dayCount: v.dayCount ?? existing?.dayCount,
-      travelers: v.travelers || existing?.travelers,
-      budget: normalizeParsedBudget(v.budget, existing?.budget),
+      travelers: nextTravelers,
+      budget: budgetFromLatestMessage ?? normalizeParsedBudget(v.budget, existing?.budget),
       preferences: v.preferences || existing?.preferences,
     };
 
@@ -2070,6 +2455,12 @@ export async function parseTripNode(
     // Remove dates from missing if dayCount is known
     if (merged.dayCount && missing.includes("dates")) {
       missing.splice(missing.indexOf("dates"), 1);
+    }
+    if (!merged.travelers && !missing.includes("travelers")) {
+      missing.push("travelers");
+    }
+    if (merged.budget && missing.includes("budget")) {
+      missing.splice(missing.indexOf("budget"), 1);
     }
 
     return {
@@ -2173,11 +2564,7 @@ export async function collectMissingInfoNode(
     const children = parsed?.travelers?.children ?? 0;
     const travelersStr = `${adults}成人${children ? ` +${children}儿童` : ""}`;
     const prefsStr = parsed?.preferences?.length ? parsed.preferences.join("、") : "无";
-    const budgetStr = parsed?.budget?.min && parsed?.budget?.max
-      ? `¥${parsed.budget.min}-${parsed.budget.max}`
-      : parsed?.budget?.min
-        ? `¥${parsed.budget.min}起`
-        : "不限";
+    const budgetStr = formatBudget(parsed?.budget);
 
     return {
       missingInfo: [...reallyMissing],
@@ -2319,83 +2706,75 @@ export async function createTripNode(
     let savedActivityCount = 0;
 
     if (draft?.days?.length) {
-      for (const day of draft.days) {
+      const dayIdMap = new Map<number, string>();
+      const dayRows = draft.days.map((day) => {
         const dayId = crypto.randomUUID();
-        const dayDate = day.date || new Date(new Date(startDate).getTime() + (day.dayIndex - 1) * 86400000).toISOString().slice(0, 10);
-
-        const { error: dayError } = await supabase.from("days").insert({
+        dayIdMap.set(day.dayIndex, dayId);
+        return {
           id: dayId,
           trip_id: tripId,
           day_index: day.dayIndex,
-          date: dayDate,
+          date: day.date || new Date(new Date(startDate).getTime() + (day.dayIndex - 1) * 86400000).toISOString().slice(0, 10),
           notes: day.notes || "",
-        });
+        };
+      });
 
-        if (dayError) {
-          console.error(`[create_trip] Day insert error:`, dayError);
-          continue;
-        }
-        savedDayCount++;
+      const { error: dayError } = await supabase.from("days").insert(dayRows);
+      if (dayError) throw new Error(`Day insert failed: ${JSON.stringify(dayError)}`);
+      savedDayCount = dayRows.length;
 
-        // Insert activities for this day
-        if (day.activities?.length) {
-          const activityRows = day.activities.map((a) => ({
-            id: crypto.randomUUID(),
-            day_id: dayId,
-            order: a.order ?? (day.activities.indexOf(a) + 1),
-            type: a.type || "attraction",
-            poi_name: a.customName || a.poi?.name || "未命名",
-            poi_address: a.poi?.address || "",
-            poi_lat: a.poi?.coordinate?.lat ?? null,
-            poi_lng: a.poi?.coordinate?.lng ?? null,
-            start_time: a.startTime || "",
-            end_time: a.endTime || "",
-            duration_minutes: a.durationMinutes ?? 60,
-            estimated_cost: a.estimatedCost ?? 0,
-            notes: a.notes || "",
-            source_reason: a.sourceReason || "",
-            opening_hours: a.openingHours || "",
-            recommended_duration: a.recommendedDuration ?? a.durationMinutes ?? 60,
-            travel_minutes_from_prev: a.travelMinutesFromPrev ?? null,
-            booking_required: a.bookingRequired ?? false,
-            weather_fit: a.weatherFit || "any",
-            ticket_reference: a.ticketReference || "",
-            is_generated: true,
+      const activityRows = draft.days.flatMap((day) =>
+        (day.activities ?? []).map((a, index) => ({
+          id: crypto.randomUUID(),
+          day_id: dayIdMap.get(day.dayIndex),
+          order: a.order ?? (index + 1),
+          type: a.type || "attraction",
+          poi_name: a.customName || a.poi?.name || "未命名",
+          poi_address: a.poi?.address || "",
+          poi_lat: a.poi?.coordinate?.lat ?? null,
+          poi_lng: a.poi?.coordinate?.lng ?? null,
+          start_time: a.startTime || "",
+          end_time: a.endTime || "",
+          duration_minutes: a.durationMinutes ?? 60,
+          estimated_cost: a.estimatedCost ?? 0,
+          notes: a.notes || "",
+          source_reason: a.sourceReason || "",
+          opening_hours: a.openingHours || "",
+          recommended_duration: a.recommendedDuration ?? a.durationMinutes ?? 60,
+          travel_minutes_from_prev: a.travelMinutesFromPrev ?? null,
+          booking_required: a.bookingRequired ?? false,
+          weather_fit: a.weatherFit || "any",
+          ticket_reference: a.ticketReference || "",
+          is_generated: true,
+        }))
+      );
+
+      if (activityRows.length > 0) {
+        const { error: actError } = await supabase.from("activities").insert(activityRows);
+        if (actError) {
+          const fallbackRows = activityRows.map((row) => ({
+            id: row.id,
+            day_id: row.day_id,
+            order: row.order,
+            type: row.type,
+            poi_name: row.poi_name,
+            start_time: row.start_time,
+            end_time: row.end_time,
+            duration_minutes: row.duration_minutes,
+            estimated_cost: row.estimated_cost,
+            notes: row.notes,
+            is_generated: row.is_generated,
           }));
-
-          const { error: actError } = await supabase.from("activities").insert(activityRows);
-          if (actError) {
-            const fallbackRows = activityRows.map((row) => ({
-              id: row.id,
-              day_id: row.day_id,
-              order: row.order,
-              type: row.type,
-              poi_name: row.poi_name,
-              start_time: row.start_time,
-              end_time: row.end_time,
-              duration_minutes: row.duration_minutes,
-              estimated_cost: row.estimated_cost,
-              notes: row.notes,
-              is_generated: row.is_generated,
-            }));
-            const { error: fallbackError } = await supabase.from("activities").insert(fallbackRows);
-            if (fallbackError) {
-              console.error(`[create_trip] Activity insert error:`, fallbackError);
-            } else {
-              savedActivityCount += fallbackRows.length;
-            }
-          } else {
-            savedActivityCount += activityRows.length;
-          }
+          const { error: fallbackError } = await supabase.from("activities").insert(fallbackRows);
+          if (fallbackError) throw new Error(`Activity insert failed: ${JSON.stringify(fallbackError)}`);
         }
+        savedActivityCount = activityRows.length;
       }
     }
 
     // Step 3: Build response card
     const travelersStr = `${reqs.travelers?.adults ?? 1}成人${reqs.travelers?.children ? ` +${reqs.travelers.children}儿童` : ""}`;
-    const budgetStr = reqs.budget?.min && reqs.budget?.max
-      ? `¥${reqs.budget.min}-${reqs.budget.max}`
-      : "不限";
+    const budgetStr = formatBudget(reqs.budget);
 
     const card = {
       type: "trip_card",

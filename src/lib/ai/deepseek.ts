@@ -52,6 +52,7 @@ export async function chatCompletion(
     temperature?: number;
     maxTokens?: number;
     responseFormat?: "text" | "json_object";
+    signal?: AbortSignal;
   }
 ): Promise<string> {
   const apiKey = getApiKey();
@@ -59,6 +60,7 @@ export async function chatCompletion(
 
   const res = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
+    signal: options?.signal,
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey}`,

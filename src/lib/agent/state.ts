@@ -20,6 +20,8 @@ export const TravelAgentAnnotation = Annotation.Root({
   // === Session ===
   threadId: Annotation<string>(),
   userId: Annotation<string>(),
+  requestStartedAt: Annotation<number>(),
+  requestDeadlineAt: Annotation<number>(),
 
   // === Loaded Context (from DB) ===
   tripId: Annotation<string>(),

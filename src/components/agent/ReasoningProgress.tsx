@@ -9,8 +9,10 @@ type PhaseKey =
   | "confirm"
   | "research_inspiration"
   | "extract_places"
+  | "budget_check"
   | "critique_itinerary"
   | "generate_itinerary"
+  | "save_version"
   | "complete";
 
 interface Props {
@@ -25,8 +27,9 @@ const STAGE_LABELS = [
   { key: "parse", label: "分析需求" },
   { key: "research_inspiration", label: "搜索攻略" },
   { key: "extract_places", label: "提炼地点" },
-  { key: "critique_itinerary", label: "校验约束" },
+  { key: "budget_check", label: "预算校验" },
   { key: "generate_itinerary", label: "生成行程" },
+  { key: "save_version", label: "保存结果" },
 ] as const;
 
 function getDisplayedPhase(phase: PhaseKey, elapsedMs: number) {
@@ -38,8 +41,9 @@ function getDisplayedPhase(phase: PhaseKey, elapsedMs: number) {
     const seconds = elapsedMs / 1000;
     if (seconds < 10) return { phase: "research_inspiration" as const, progress: 28 };
     if (seconds < 22) return { phase: "extract_places" as const, progress: 52 };
-    if (seconds < 34) return { phase: "critique_itinerary" as const, progress: 74 };
-    return { phase: "generate_itinerary" as const, progress: 88 };
+    if (seconds < 34) return { phase: "budget_check" as const, progress: 68 };
+    if (seconds < 44) return { phase: "generate_itinerary" as const, progress: 84 };
+    return { phase: "save_version" as const, progress: 94 };
   }
 
   switch (phase) {
@@ -51,10 +55,14 @@ function getDisplayedPhase(phase: PhaseKey, elapsedMs: number) {
         : { phase, progress: 30 };
     case "extract_places":
       return { phase, progress: 56 };
+    case "budget_check":
+      return { phase, progress: 68 };
     case "critique_itinerary":
       return { phase, progress: 76 };
     case "generate_itinerary":
       return { phase, progress: 90 };
+    case "save_version":
+      return { phase, progress: 96 };
     default:
       return { phase: "parse" as const, progress: 10 };
   }
@@ -109,7 +117,7 @@ export function ReasoningProgress({
         />
       </div>
 
-      <div className="grid grid-cols-5 gap-2">
+      <div className="grid grid-cols-6 gap-2">
         {STAGE_LABELS.map((stage, index) => {
           const activeIndex = STAGE_LABELS.findIndex(
             (item) => item.key === model.phase

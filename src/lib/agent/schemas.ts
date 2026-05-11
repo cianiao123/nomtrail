@@ -64,9 +64,23 @@ export const ParseTripResultSchema = z.object({
 });
 
 // === Itinerary Generation ===
+const ActivityTypeSchema = z.preprocess((value) => {
+  const normalized = String(value || "").toLowerCase().trim();
+  if (["meal", "dining", "restaurant", "cafe", "coffee", "snack"].includes(normalized)) {
+    return "food";
+  }
+  if (["sightseeing", "scenic", "spot", "poi"].includes(normalized)) {
+    return "attraction";
+  }
+  if (["transfer", "transit", "traffic"].includes(normalized)) {
+    return "transport";
+  }
+  return normalized;
+}, z.enum(["attraction", "food", "restaurant", "hotel", "transport", "other"]));
+
 export const ActivityDraftSchema = z.object({
   order: z.number(),
-  type: z.enum(["attraction", "food", "restaurant", "hotel", "transport", "other"]),
+  type: ActivityTypeSchema,
   name: z.string().min(1),
   startTime: z.string().optional(),
   endTime: z.string().optional(),

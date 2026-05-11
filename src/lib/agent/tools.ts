@@ -34,9 +34,16 @@ export const XHS_MCP_ENDPOINT =
   process.env.XHS_MCP_URL || "http://localhost:3456/mcp";
 
 const isVercelRuntime = process.env.VERCEL === "1";
-const XHS_SEARCH_COUNT = isVercelRuntime ? 3 : 6;
-const WEB_SEARCH_MAX_USES = isVercelRuntime ? 2 : 4;
-const POI_ENRICH_LIMIT = isVercelRuntime ? 6 : 12;
+const XHS_SEARCH_COUNT = 3;
+const WEB_SEARCH_MAX_USES = 1;
+const POI_ENRICH_LIMIT = isVercelRuntime ? 2 : 6;
+const CANDIDATE_POOL_LIMIT = 8;
+
+function createTimeoutSignal(timeoutMs: number): AbortSignal {
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), timeoutMs);
+  return controller.signal;
+}
 
 export function detectXHSReference(message: string): boolean {
   return /小红书|xhs|rednote|收藏|笔记链接/.test(message);
@@ -110,6 +117,7 @@ export async function fetchXHSNote(
   try {
     const res = await fetch(`${XHS_MCP_ENDPOINT}/tools/call`, {
       method: "POST",
+      signal: createTimeoutSignal(isVercelRuntime ? 2500 : 8000),
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         name: "xhs_search",
@@ -166,7 +174,11 @@ async function searchTravelWeb(
           max_uses: WEB_SEARCH_MAX_USES,
         },
       ],
-      { temperature: 0.2, maxTokens: 1800 }
+      {
+        temperature: 0.2,
+        maxTokens: isVercelRuntime ? 700 : 1800,
+        signal: createTimeoutSignal(isVercelRuntime ? 6500 : 12000),
+      }
     );
 
     return [{ query, content: result.content, toolCalls: result.toolCalls }];
@@ -212,7 +224,9 @@ async function searchPOIRecord(
       page: "1",
       extensions: "all",
     });
-    const res = await fetch(`https://restapi.amap.com/v3/place/text?${params}`);
+    const res = await fetch(`https://restapi.amap.com/v3/place/text?${params}`, {
+      signal: createTimeoutSignal(isVercelRuntime ? 700 : 5000),
+    });
     const data = (await res.json()) as {
       status?: string;
       pois?: Array<{
@@ -250,6 +264,91 @@ function combineInspirationText(items: InspirationItem[]): string {
     .join("\n\n");
 }
 
+function normalizeCandidateName(name: string): string {
+  return name
+    .replace(/[《》「」『』“”"'`]/g, "")
+    .replace(/[（(].*?[）)]/g, "")
+    .replace(/^(推荐|打卡|必去|必吃|可去|附近|周边)/, "")
+    .replace(/(附近|周边|一带|片区|区域|路线|攻略|玩法|体验|推荐|打卡点)$/g, "")
+    .trim();
+}
+
+function normalizeCandidateKey(name: string): string {
+  return normalizeCandidateName(name)
+    .replace(/\s+/g, "")
+    .replace(/[·・,，。.\-—_]/g, "")
+    .toLowerCase();
+}
+
+function extractFallbackPlaceNames(text: string): string[] {
+  const names = new Set<string>();
+  const quotedMatches = text.matchAll(/[《「『“"]([^《》「」『』“”"]{2,18})[》」』”"]/g);
+  for (const match of quotedMatches) {
+    const name = normalizeCandidateName(match[1] || "");
+    if (isUsefulFallbackName(name)) names.add(name);
+  }
+
+  const suffixPattern =
+    /[\u4e00-\u9fa5A-Za-z0-9·・]{2,18}(?:博物馆|美术馆|艺术馆|公园|乐园|寺|塔|宫|殿|长城|胡同|街区|步行街|商业街|夜市|市场|商圈|广场|餐厅|饭店|酒楼|咖啡馆|咖啡店|甜品店|酒吧|茶馆|书店|剧场|影院|码头|古镇|古城|园|湖|山|桥|岛|湾|海滩|温泉)/g;
+  for (const match of text.matchAll(suffixPattern)) {
+    const name = normalizeCandidateName(match[0] || "");
+    if (isUsefulFallbackName(name)) names.add(name);
+  }
+
+  return [...names];
+}
+
+function isUsefulFallbackName(name: string): boolean {
+  if (name.length < 2 || name.length > 18) return false;
+  if (/搜索失败|网页搜索失败|攻略|旅游|行程|路线|预算|天数|偏好/.test(name)) return false;
+  return /[\u4e00-\u9fa5A-Za-z]/.test(name);
+}
+
+function inferPriorityTagFromText(text: string): SavedPlaceCandidate["priorityTag"] {
+  if (/美食|吃|餐厅|饭店|咖啡|甜品|小吃/.test(text)) return "food_candidate";
+  if (/雨天|室内|博物馆|美术馆|艺术馆/.test(text)) return "rainy_backup";
+  if (/夜景|夜游|酒吧|夜市|live/i.test(text)) return "night_option";
+  return "nearby_optional";
+}
+
+function buildFallbackCandidatesFromInspiration(
+  items: InspirationItem[],
+  destination: string
+): SavedPlaceCandidate[] {
+  const seen = new Set<string>();
+  const candidates: SavedPlaceCandidate[] = [];
+
+  for (const item of items) {
+    if (item.summary.startsWith("[") && item.qualityScore <= 0.2) continue;
+    const text = `${item.title}\n${item.summary}\n${item.tags.join("、")}`;
+    const mentionedNames = item.mentionedPlaces
+      .map(normalizeCandidateName)
+      .filter(isUsefulFallbackName);
+    const inferredNames = extractFallbackPlaceNames(text);
+
+    for (const name of [...mentionedNames, ...inferredNames]) {
+      const key = normalizeCandidateKey(name);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+
+      const priorityTag = inferPriorityTagFromText(text);
+      candidates.push({
+        name,
+        city: item.city || destination,
+        category: normalizeCategory(`${name} ${item.tags.join(" ")} ${priorityTag}`),
+        priorityTag,
+        reason: `来自攻略摘要的候选点：${item.summary.slice(0, 48)}`,
+        sourceRefs: [item.title],
+        qualityScore: Math.max(0.35, Math.min(0.75, item.qualityScore || 0.5)),
+      });
+
+      if (candidates.length >= CANDIDATE_POOL_LIMIT) return candidates;
+    }
+  }
+
+  return candidates;
+}
+
 export async function searchTravelInspiration(
   destination: string,
   preferences: string[],
@@ -264,8 +363,10 @@ export async function searchTravelInspiration(
   };
 }> {
   const xhsKeyword = `${destination} ${dayCount}天 ${preferences.join(" ")} 小红书 攻略`;
-  const xhsNotes = await fetchXHSNote(xhsKeyword);
-  const webResults = await searchTravelWeb(destination, preferences, dayCount);
+  const [xhsNotes, webResults] = await Promise.all([
+    fetchXHSNote(xhsKeyword),
+    searchTravelWeb(destination, preferences, dayCount),
+  ]);
 
   const xhsItems: InspirationItem[] = xhsNotes.map((note) => ({
     title: note.title,
@@ -323,27 +424,63 @@ ${combineInspirationText(inspirationItems)}
 
 只输出合法 JSON。`;
 
-  const extracted = await deepseekClient.generateJson<Record<string, unknown>>(
-    [
+  let validated: {
+    inspirationItems: InspirationItem[];
+    savedPlaceCandidates: SavedPlaceCandidate[];
+  };
+  try {
+    const extracted = await deepseekClient.generateJson<Record<string, unknown>>(
+      [
+        {
+          role: "system",
+          content:
+            "你是旅行种草内容解析器。请把种草内容转成结构化地点候选池，避免重复，尽量保留高价值地点和玩法。只输出合法JSON。",
+        },
+        { role: "user", content: extractionPrompt },
+      ],
       {
-        role: "system",
-        content:
-          "你是旅行种草内容解析器。请把种草内容转成结构化地点候选池，避免重复，尽量保留高价值地点和玩法。只输出合法JSON。",
-      },
-      { role: "user", content: extractionPrompt },
-    ],
-    { temperature: 0.2, maxTokens: 2500 }
-  );
+        temperature: 0.2,
+        maxTokens: isVercelRuntime ? 900 : 2500,
+        signal: createTimeoutSignal(isVercelRuntime ? 4500 : 10000),
+      }
+    );
 
-  const normalizedPayload = normalizeInspirationPayload(extracted, destination);
-  const validated = validateWithSchema(
-    TravelInspirationResultSchema,
-    normalizedPayload,
-    "travel_inspiration"
-  );
+    const normalizedPayload = normalizeInspirationPayload(extracted, destination);
+    const parsedPayload = validateWithSchema(
+      TravelInspirationResultSchema,
+      normalizedPayload,
+      "travel_inspiration"
+    );
+    validated = {
+      inspirationItems: parsedPayload.inspirationItems,
+      savedPlaceCandidates: parsedPayload.savedPlaceCandidates.map((candidate) => ({
+        ...candidate,
+        ticketReference: candidate.ticketReference ?? undefined,
+      })),
+    };
+  } catch {
+    validated = {
+      inspirationItems,
+      savedPlaceCandidates: buildFallbackCandidatesFromInspiration(
+        inspirationItems,
+        destination
+      ),
+    };
+  }
 
+  if (validated.savedPlaceCandidates.length === 0) {
+    validated = {
+      ...validated,
+      savedPlaceCandidates: buildFallbackCandidatesFromInspiration(
+        validated.inspirationItems.length ? validated.inspirationItems : inspirationItems,
+        destination
+      ),
+    };
+  }
+
+  const candidatePool = validated.savedPlaceCandidates.slice(0, CANDIDATE_POOL_LIMIT);
   const enrichedCandidates: SavedPlaceCandidate[] = [];
-  for (const candidate of validated.savedPlaceCandidates.slice(0, POI_ENRICH_LIMIT)) {
+  for (const candidate of candidatePool.slice(0, POI_ENRICH_LIMIT)) {
     const poi = await searchPOIRecord(candidate.name, candidate.city || destination);
     enrichedCandidates.push({
       ...candidate,
@@ -354,14 +491,22 @@ ${combineInspirationText(inspirationItems)}
       ticketReference: candidate.ticketReference ?? poi.ticketReference,
     });
   }
+  const enrichmentKeys = new Set(enrichedCandidates.map((candidate) => normalizeCandidateKey(candidate.name)));
+  const remainingCandidates = candidatePool
+    .filter((candidate) => !enrichmentKeys.has(normalizeCandidateKey(candidate.name)))
+    .map((candidate) => ({
+      ...candidate,
+      category: normalizeCategory(candidate.category),
+    }));
+  const savedPlaceCandidates = [...enrichedCandidates, ...remainingCandidates];
 
   return {
     inspirationItems: validated.inspirationItems,
-    savedPlaceCandidates: enrichedCandidates,
+    savedPlaceCandidates,
     debug: {
       xhsCount: xhsItems.length,
       webCount: webItems.length,
-      enrichedCount: enrichedCandidates.length,
+      enrichedCount: savedPlaceCandidates.length,
     },
   };
 }
