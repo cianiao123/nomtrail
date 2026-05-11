@@ -17,6 +17,7 @@ import {
   appendMissingWishlistActivities,
   extractWishlistNamesFromContext,
   isWishlistActivity,
+  markWishlistNotes,
   markWishlistSource,
   mergeWishlistCandidates,
   normalizeWishlistName,
@@ -1442,7 +1443,9 @@ export async function generateItineraryNode(
         endTime: a.endTime,
         durationMinutes: a.durationMinutes,
         estimatedCost: a.estimatedCost,
-        notes: a.notes,
+        notes: isWishlistActivity(a.name, wishlistNames)
+          ? markWishlistNotes(a.notes)
+          : a.notes,
         sourceReason: isWishlistActivity(a.name, wishlistNames)
           ? markWishlistSource(a.sourceReason)
           : a.sourceReason,
@@ -1538,7 +1541,9 @@ export async function generateItineraryNode(
           endTime: a.endTime,
           durationMinutes: a.durationMinutes,
           estimatedCost: a.estimatedCost,
-          notes: a.notes,
+          notes: isWishlistActivity(a.name, wishlistNames)
+            ? markWishlistNotes(a.notes)
+            : a.notes,
           sourceReason: isWishlistActivity(a.name, wishlistNames)
             ? markWishlistSource(a.sourceReason)
             : a.sourceReason,
@@ -1983,6 +1988,7 @@ export async function saveVersionNode(
           duration_minutes: row.duration_minutes,
           estimated_cost: row.estimated_cost,
           notes: row.notes,
+          source_reason: row.source_reason,
           is_generated: row.is_generated,
         }));
         const { error: fallbackError } = await supabase.from("activities").insert(fallbackRows);
@@ -2752,6 +2758,7 @@ export async function createTripNode(
             duration_minutes: row.duration_minutes,
             estimated_cost: row.estimated_cost,
             notes: row.notes,
+            source_reason: row.source_reason,
             is_generated: row.is_generated,
           }));
           const { error: fallbackError } = await supabase.from("activities").insert(fallbackRows);

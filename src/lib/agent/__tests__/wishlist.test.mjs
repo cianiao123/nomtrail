@@ -62,3 +62,10 @@ test("turns wishlist names into must-go candidates before generated candidates",
     ]
   );
 });
+
+test("marks wishlist notes for detail page display", () => {
+  const { markWishlistNotes } = loadModule();
+
+  assert.equal(markWishlistNotes("建议早上去"), "心愿地：建议早上去");
+  assert.equal(markWishlistNotes("心愿地：来自探索页心愿池"), "心愿地：来自探索页心愿池");
+});

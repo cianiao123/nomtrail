@@ -1,6 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabase } from "@/lib/supabase/server";
 
+type TripRow = Record<string, unknown> & { id: string };
+type DayRow = Record<string, unknown> & { id: string; trip_id: string };
+type ActivityRow = Record<string, unknown> & { id: string; day_id: string };
+type PostActivity = Record<string, unknown> & {
+  poi?: {
+    name?: string;
+    address?: string;
+    coordinate?: { lat?: number; lng?: number };
+  } | null;
+};
+type PostDay = Record<string, unknown> & {
+  activities?: PostActivity[];
+};
+
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
@@ -20,14 +34,16 @@ export async function GET(req: NextRequest) {
     }
 
     // Fetch days for all these trips
-    const tripIds = tripRows.map((t: any) => t.id);
+    const typedTripRows = tripRows as TripRow[];
+    const tripIds = typedTripRows.map((t) => t.id);
     const { data: allDays } = await supabase
       .from("days")
       .select("*")
       .in("trip_id", tripIds)
       .order("day_index", { ascending: true });
 
-    const dayIds = (allDays ?? []).map((d: any) => d.id);
+    const typedDays = (allDays ?? []) as DayRow[];
+    const dayIds = typedDays.map((d) => d.id);
     const { data: allActivities } = dayIds.length > 0
       ? await supabase
         .from("activities")
@@ -36,8 +52,10 @@ export async function GET(req: NextRequest) {
         .order("order", { ascending: true })
       : { data: [] };
 
+    const typedActivities = (allActivities ?? []) as ActivityRow[];
+
     // Map Supabase columns back to frontend Trip shape
-    const trips = tripRows.map((t: Record<string, unknown>) => ({
+    const trips = typedTripRows.map((t) => ({
       id: t.id,
       userId: t.user_id,
       title: t.title,
@@ -50,17 +68,17 @@ export async function GET(req: NextRequest) {
       preferences: t.preferences,
       status: t.status,
       isPublic: t.is_public,
-      days: (allDays ?? [])
-        .filter((d: any) => d.trip_id === t.id)
-        .map((d: any) => ({
+      days: typedDays
+        .filter((d) => d.trip_id === t.id)
+        .map((d) => ({
           id: d.id,
           tripId: d.trip_id,
           dayIndex: d.day_index,
           date: d.date,
           notes: d.notes || "",
-          activities: (allActivities ?? [])
-            .filter((a: any) => a.day_id === d.id)
-            .map((a: any) => ({
+          activities: typedActivities
+            .filter((a) => a.day_id === d.id)
+            .map((a) => ({
               id: a.id,
               dayId: a.day_id,
               order: a.order,
@@ -147,9 +165,9 @@ export async function POST(req: NextRequest) {
       const { error: daysError } = await supabase.from("days").insert(dayRows);
       if (daysError) throw new Error(JSON.stringify(daysError));
 
-      const activityRows = body.days.flatMap((day: Record<string, any>) =>
+      const activityRows = (body.days as PostDay[]).flatMap((day) =>
         Array.isArray(day.activities)
-          ? day.activities.map((activity: Record<string, any>, index: number) => ({
+          ? day.activities.map((activity, index: number) => ({
               id: activity.id || crypto.randomUUID(),
               day_id: day.id,
               order: activity.order ?? (index + 1) * 1000,
@@ -180,7 +198,7 @@ export async function POST(req: NextRequest) {
       if (activityRows.length > 0) {
         const { error: activitiesError } = await supabase.from("activities").insert(activityRows);
         if (activitiesError) {
-          const fallbackRows = activityRows.map((activity: Record<string, any>) => ({
+          const fallbackRows = activityRows.map((activity) => ({
             id: activity.id,
             day_id: activity.day_id,
             order: activity.order,
@@ -191,6 +209,7 @@ export async function POST(req: NextRequest) {
             duration_minutes: activity.duration_minutes,
             estimated_cost: activity.estimated_cost,
             notes: activity.notes,
+            source_reason: activity.source_reason,
             is_generated: activity.is_generated,
           }));
           const { error: fallbackError } = await supabase.from("activities").insert(fallbackRows);

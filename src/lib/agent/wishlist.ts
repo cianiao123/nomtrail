@@ -35,6 +35,11 @@ export function markWishlistSource(sourceReason: string | undefined) {
   return value.includes("心愿地") ? value : `[心愿地]${value ? ` ${value}` : ""}`;
 }
 
+export function markWishlistNotes(notes: string | undefined) {
+  const value = notes ?? "";
+  return value.includes("心愿地") ? value : `心愿地：${value || "来自探索页心愿池。"}`;
+}
+
 function inferWishlistCategory(name: string): SavedPlaceCandidate["category"] {
   if (/餐厅|饭店|小吃|咖啡|甜品|茶|酒吧|食堂|面馆|火锅|烤肉/.test(name)) return "food";
   if (/酒店|民宿|客栈|宾馆/.test(name)) return "hotel";
