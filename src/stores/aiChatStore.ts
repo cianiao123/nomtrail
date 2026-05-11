@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { ChatMessage } from '@/types/ai';
+import { createId } from '@/lib/utils/createId';
 
 interface AIChatState {
   messages: ChatMessage[];
@@ -29,7 +30,7 @@ export const useAIChatStore = create<AIChatState>((set, get) => ({
       messages: [
         ...s.messages,
         {
-          id: crypto.randomUUID(),
+          id: createId('chat'),
           role: 'assistant',
           content,
           timestamp: new Date().toISOString(),

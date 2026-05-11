@@ -7,6 +7,7 @@ import { useMapStore } from "@/stores/mapStore";
 import { Icon } from "@/components/shared/Icon";
 import { formatDate, getDayOfWeek } from "@/lib/utils/dateFormat";
 import { cn } from "@/lib/utils/cn";
+import { createId } from "@/lib/utils/createId";
 import { Day, Activity, Trip } from "@/types/trip";
 import { ACTIVITY_TYPE_ICONS, ACTIVITY_TYPE_LABELS } from "@/lib/constants";
 import { AddActivityForm } from "@/components/trip/AddActivityForm";
@@ -69,7 +70,7 @@ function syncTripDaysWithMeta(
   while (nextDays.length < targetCount) {
     const index = nextDays.length;
     nextDays.push({
-      id: crypto.randomUUID(),
+      id: createId("day"),
       tripId: trip.id,
       dayIndex: index,
       date: addDays(startDate, index),
@@ -603,7 +604,7 @@ function TripDetailContent() {
     }
 
     const newAct: Activity = {
-      id: crypto.randomUUID(),
+      id: createId("activity"),
       dayId,
       order: (displayDays.find((d) => d.id === dayId)?.activities.length ?? 0) * 1000 + 1000,
       type: formData.type as Activity["type"],

@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { useAIChatStore } from "@/stores/aiChatStore";
 import { Icon } from "@/components/shared/Icon";
 import { cn } from "@/lib/utils/cn";
+import { createId } from "@/lib/utils/createId";
 
 const SUGGESTIONS = [
   { icon: "weekend", text: "推荐一个适合周末的短途旅行" },
@@ -44,7 +45,7 @@ export function AIAssistantWidget() {
     if (!userMsg || isStreaming) return;
     if (!text) setInput("");
     addMessage({
-      id: crypto.randomUUID(),
+      id: createId("chat"),
       role: "user",
       content: userMsg,
       timestamp: new Date().toISOString(),

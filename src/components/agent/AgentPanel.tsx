@@ -8,6 +8,7 @@ import { MessageContent } from "./MessageContent";
 import { ReasoningProgress } from "./ReasoningProgress";
 import type { ConfirmedPlace } from "@/types/agent";
 import { cn } from "@/lib/utils/cn";
+import { createId } from "@/lib/utils/createId";
 import { useTripStore } from "@/stores/tripStore";
 import { useUserStore } from "@/stores/userStore";
 
@@ -253,7 +254,7 @@ export function AgentPanel({ tripId, className, alwaysExpanded }: Props) {
 
     if (!overrideMessage) setInput("");
     addMessage({
-      id: crypto.randomUUID(),
+      id: createId("message"),
       role: "user",
       content: msg,
       timestamp: new Date().toISOString(),
@@ -331,7 +332,7 @@ export function AgentPanel({ tripId, className, alwaysExpanded }: Props) {
   const handleReject = () => {
     rejectPlaces();
     addMessage({
-      id: crypto.randomUUID(),
+      id: createId("message"),
       role: "agent",
       content: "已清除识别的地点，你可以重新粘贴。",
       timestamp: new Date().toISOString(),

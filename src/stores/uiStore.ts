@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { createId } from '@/lib/utils/createId';
 
 export interface Toast {
   id: string;
@@ -37,7 +38,7 @@ export const useUIStore = create<UIState>((set) => ({
   closeModal: () => set({ activeModal: null }),
   addToast: (toast) =>
     set((s) => ({
-      toasts: [...s.toasts, { ...toast, id: crypto.randomUUID() }],
+      toasts: [...s.toasts, { ...toast, id: createId('toast') }],
     })),
   removeToast: (id) =>
     set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),

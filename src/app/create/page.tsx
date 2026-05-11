@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Icon } from "@/components/shared/Icon";
 import { ReasoningProgress } from "@/components/agent/ReasoningProgress";
 import { cn } from "@/lib/utils/cn";
+import { createId } from "@/lib/utils/createId";
 import type { AgentRunSSEEvent } from "@/types/agent";
 import { Activity, Day, PreferenceTag, Trip } from "@/types/trip";
 import { PREFERENCE_TAGS, BUDGET_OPTIONS } from "@/lib/constants";
@@ -42,7 +43,7 @@ function buildEmptyDays(tripId: string, startDate: string, endDate: string): Day
     date.setDate(date.getDate() + index);
 
     return {
-      id: crypto.randomUUID(),
+      id: createId("day"),
       tripId,
       dayIndex: index,
       date: date.toISOString().slice(0, 10),
@@ -169,7 +170,7 @@ function CreatePageContent() {
 
   const buildTripDraft = (): Trip => {
     const budget = BUDGET_OPTIONS[budgetIndex];
-    const id = crypto.randomUUID();
+    const id = createId("trip");
     const now = new Date().toISOString();
     const days = buildEmptyDays(id, startDate, endDate);
     const wishlistNames = parseWishlistParam(initialWishlist);
@@ -182,7 +183,7 @@ function CreatePageContent() {
       const startHour = Math.min(18, 9 + activityIndex * 3);
       const endHour = Math.min(20, startHour + 2);
       const activity: Activity = {
-        id: crypto.randomUUID(),
+        id: createId("activity"),
         dayId: day.id,
         order: (activityIndex + 1) * 1000,
         type: "attraction",

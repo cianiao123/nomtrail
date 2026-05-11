@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Icon } from "@/components/shared/Icon";
 import { LoadingSpinner } from "@/components/shared/LoadingSpinner";
 import { cn } from "@/lib/utils/cn";
+import { createId } from "@/lib/utils/createId";
 
 interface POI {
   id: string;
@@ -158,7 +159,7 @@ export default function ExplorePage() {
       .then((data) => {
         if (data.success && data.data?.pois?.length > 0) {
           const list = data.data.pois.map((p: any) => ({
-            id: p.amapId || crypto.randomUUID(),
+            id: p.amapId || createId("poi"),
             name: p.name,
             address: p.address || "",
             lng: p.coordinate?.lng || 0,

@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { Trip, Day, Activity, ValidationWarning } from '@/types/trip';
 import { reindex } from '@/lib/utils/orderUtils';
+import { createId } from '@/lib/utils/createId';
 
 interface TripState {
   // All trips (persisted)
@@ -90,7 +91,7 @@ export const useTripStore = create<TripState>()(
         const trip = get().currentTrip;
         if (!trip) return;
         const newDay: Day = {
-          id: crypto.randomUUID(),
+          id: createId('day'),
           tripId: trip.id,
           dayIndex: trip.days.length,
           date: trip.days.length > 0
