@@ -53,7 +53,10 @@ export const ParseTripResultSchema = z.object({
     .nullable()
     .optional(),
   budget: z
-    .object({ min: z.number(), max: z.number() })
+    .object({
+      min: z.number().nullable().optional(),
+      max: z.number().nullable().optional(),
+    })
     .nullable()
     .optional(),
   preferences: z.array(z.string()).nullable().optional(),

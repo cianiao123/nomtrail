@@ -169,6 +169,26 @@ function parseDayIndexFromMessage(message: string): number | null {
   return (map[tens] ?? 1) * 10 + (map[ones] ?? 0);
 }
 
+function normalizeParsedBudget(
+  budget?: { min?: number | null; max?: number | null } | null,
+  fallback?: { min: number; max: number }
+): { min: number; max: number } | undefined {
+  if (!budget) return fallback;
+  const min = typeof budget.min === "number" ? budget.min : 0;
+  const max = typeof budget.max === "number" ? budget.max : fallback?.max;
+  if (typeof max !== "number") return fallback;
+  return { min, max };
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      setTimeout(() => reject(new Error(message)), timeoutMs);
+    }),
+  ]);
+}
+
 function extractPlaceToAdd(message: string): string | null {
   const compact = message.replace(/[。！!？?]/g, "").trim();
   const patterns = [
@@ -934,7 +954,11 @@ export async function researchInspirationNode(
   }
 
   try {
-    const result = await searchTravelInspiration(destination, preferences, dayCount);
+    const result = await withTimeout(
+      searchTravelInspiration(destination, preferences, dayCount),
+      process.env.VERCEL === "1" ? 22000 : 45000,
+      "攻略搜索超时"
+    );
     const candidateContext = result.savedPlaceCandidates
       .slice(0, 8)
       .map((candidate) => `${candidate.name}(${candidate.priorityTag})`)
@@ -1995,7 +2019,7 @@ export async function parseTripNode(
       endDate: v.endDate || existing?.endDate,
       dayCount: v.dayCount ?? existing?.dayCount,
       travelers: v.travelers || existing?.travelers,
-      budget: v.budget || existing?.budget,
+      budget: normalizeParsedBudget(v.budget, existing?.budget),
       preferences: v.preferences || existing?.preferences,
     };
 

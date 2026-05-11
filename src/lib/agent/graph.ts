@@ -79,7 +79,13 @@ function routeAfterConfirm(state: TravelAgentState): string {
   if (state.trip || state.tripId || state.itineraryDraft?.days?.length || (state.versions?.length ?? 0) > 0) {
     return "revise_itinerary";
   }
-  return state.parsedTripRequirements?.destination ? "research_inspiration" : END;
+  return state.parsedTripRequirements?.destination
+    ? "research_inspiration"
+    : END;
+}
+
+function shouldSkipPostGenerationChecks(): boolean {
+  return process.env.VERCEL === "1";
 }
 
 function routeAfterCollectMissing(state: TravelAgentState): string {
@@ -93,8 +99,14 @@ function routeAfterCollectMissing(state: TravelAgentState): string {
     && !!reqs.preferences?.length;
   const wantsGeneration = /直接|开始|生成|规划|安排|帮我/.test(state.currentMessage ?? "");
 
-  if (hasEnoughTripInfo && wantsGeneration) return "research_inspiration";
+  if (hasEnoughTripInfo && wantsGeneration) {
+    return "research_inspiration";
+  }
   return END;
+}
+
+function routeAfterGenerate(): string {
+  return shouldSkipPostGenerationChecks() ? "save_version" : "normalize_activities";
 }
 
 function routeAfterSave(state: TravelAgentState): string {
@@ -156,7 +168,10 @@ export const travelAgentGraph = new StateGraph(TravelAgentAnnotation)
 
   // inspiration → generate → normalize → critique → save → (create trip if new)
   .addEdge("research_inspiration", "generate_itinerary")
-  .addEdge("generate_itinerary", "normalize_activities")
+  .addConditionalEdges("generate_itinerary", routeAfterGenerate, {
+    normalize_activities: "normalize_activities",
+    save_version: "save_version",
+  })
   .addEdge("normalize_activities", "critique_itinerary")
   .addEdge("critique_itinerary", "save_version")
   .addEdge("revise_itinerary", "save_version")

@@ -33,6 +33,11 @@ export interface XHSNote {
 export const XHS_MCP_ENDPOINT =
   process.env.XHS_MCP_URL || "http://localhost:3456/mcp";
 
+const isVercelRuntime = process.env.VERCEL === "1";
+const XHS_SEARCH_COUNT = isVercelRuntime ? 3 : 6;
+const WEB_SEARCH_MAX_USES = isVercelRuntime ? 2 : 4;
+const POI_ENRICH_LIMIT = isVercelRuntime ? 6 : 12;
+
 export function detectXHSReference(message: string): boolean {
   return /小红书|xhs|rednote|收藏|笔记链接/.test(message);
 }
@@ -108,7 +113,7 @@ export async function fetchXHSNote(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         name: "xhs_search",
-        arguments: { keyword: urlOrKeyword, count: 6 },
+        arguments: { keyword: urlOrKeyword, count: XHS_SEARCH_COUNT },
       }),
     });
 
@@ -158,7 +163,7 @@ async function searchTravelWeb(
         {
           type: "web_search_20250305",
           name: "web_search",
-          max_uses: 4,
+          max_uses: WEB_SEARCH_MAX_USES,
         },
       ],
       { temperature: 0.2, maxTokens: 1800 }
@@ -338,7 +343,7 @@ ${combineInspirationText(inspirationItems)}
   );
 
   const enrichedCandidates: SavedPlaceCandidate[] = [];
-  for (const candidate of validated.savedPlaceCandidates.slice(0, 12)) {
+  for (const candidate of validated.savedPlaceCandidates.slice(0, POI_ENRICH_LIMIT)) {
     const poi = await searchPOIRecord(candidate.name, candidate.city || destination);
     enrichedCandidates.push({
       ...candidate,
