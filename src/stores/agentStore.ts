@@ -152,7 +152,16 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     set((s) => ({ messages: [...s.messages, msg] })),
 
   setStreaming: (streaming) =>
-    set({ isStreaming: streaming }),
+    set(streaming
+      ? {
+          isStreaming: true,
+          questionCard: null,
+          destinationRecommendationCard: null,
+          exportPayload: null,
+          streamingContent: "",
+        }
+      : { isStreaming: false }
+    ),
 
   handleSSEEvent: (event) => {
     switch (event.type) {
@@ -259,16 +268,16 @@ export const useAgentStore = create<AgentState>((set, get) => ({
             updates.actionLog = data.actionLog as AgentActionLogEntry[];
           if (typeof data.currentVersionNumber === "number")
             updates.currentVersionNumber = data.currentVersionNumber;
-          if (data.questionCard) {
+          if ("questionCard" in data) {
             updates.questionCard = data.questionCard as AgentState["questionCard"];
             updates.destinationRecommendationCard = null;
           }
-          if (data.destinationRecommendationCard) {
+          if ("destinationRecommendationCard" in data) {
             updates.destinationRecommendationCard =
               data.destinationRecommendationCard as AgentState["destinationRecommendationCard"];
             updates.questionCard = null;
           }
-          if (data.tripCard) {
+          if ("tripCard" in data) {
             updates.tripCard = data.tripCard as AgentState["tripCard"];
             updates.questionCard = null; // Clear stale question card when trip is created
             updates.destinationRecommendationCard = null;

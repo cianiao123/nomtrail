@@ -189,6 +189,18 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string)
   ]);
 }
 
+function estimateGeneratedCost(
+  days: { activities: { estimatedCost?: number }[] }[]
+): number {
+  return days.reduce(
+    (sum, day) => sum + day.activities.reduce(
+      (daySum, activity) => daySum + (activity.estimatedCost ?? 0),
+      0
+    ),
+    0
+  );
+}
+
 function extractPlaceToAdd(message: string): string | null {
   const compact = message.replace(/[。！!？?]/g, "").trim();
   const patterns = [
@@ -1119,6 +1131,33 @@ export async function generateItineraryNode(
 
     if (validated.days.length !== dayCount) {
       throw new Error(`行程天数不匹配：需要 ${dayCount} 天，实际生成 ${validated.days.length} 天`);
+    }
+
+    const estimatedTotal = estimateGeneratedCost(validated.days);
+    if (budgetMax > 0 && estimatedTotal > budgetMax) {
+      parsed = await deepseekClient.generateJson(
+        [
+          {
+            role: "system",
+            content:
+              "你是专业旅行规划师。预算是硬约束。只输出合法JSON。",
+          },
+          {
+            role: "user",
+            content:
+              `${prompt}\n\n上一次输出的活动预估总费用为 ${estimatedTotal} CNY，超过用户预算上限 ${budgetMax} CNY。请重新生成完整 ${dayCount} 天行程，活动 estimatedCost 合计必须 <= ${budgetMax} CNY，并且不能少于 ${budgetMin} CNY 太多；优先免费/低价景点、公共交通和平价餐厅，删除高价餐厅或高价体验。`,
+          },
+        ],
+        { temperature: 0.2, maxTokens: 4096 }
+      );
+      validated = validateWithSchema(
+        GenerateItineraryResultSchema,
+        parsed,
+        "generate_itinerary"
+      );
+      if (validated.days.length !== dayCount) {
+        throw new Error(`行程天数不匹配：需要 ${dayCount} 天，实际生成 ${validated.days.length} 天`);
+      }
     }
     const wishlistNames = extractWishlistNames(state);
 

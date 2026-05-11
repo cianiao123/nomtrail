@@ -79,20 +79,21 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <div className="absolute inset-0 bg-surface-bright/94 backdrop-blur-2xl" />
 
                 {/* Header */}
-                <div className="relative overflow-hidden border-b border-outline-variant/50 bg-[linear-gradient(135deg,rgba(15,55,100,0.96),rgba(7,27,51,0.98))] px-5 py-5 text-white">
-                  <div className="flex items-center gap-3">
-                    <div className="relative flex h-10 w-10 items-center justify-center rounded-full border border-white/12 bg-white/8">
-                      <Icon name="auto_awesome" className="text-primary-fixed text-[20px]" filled />
-                      <div className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-primary-fixed-dim ring-2 ring-primary" />
+                <div className="relative flex items-center justify-between gap-4 overflow-hidden border-b border-outline-variant/45 bg-[linear-gradient(135deg,rgba(15,55,100,0.96),rgba(7,27,51,0.98))] px-4 py-3 text-white">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <div className="relative flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border border-white/12 bg-white/8">
+                      <Icon name="auto_awesome" className="text-primary-fixed text-[18px]" filled />
+                      <div className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-primary-fixed-dim ring-2 ring-primary" />
                     </div>
-                    <div className="relative z-10">
+                    <div className="relative z-10 min-w-0">
                       <p className="text-[11px] tracking-[0.22em] text-white/54">NomTrail 助手</p>
                       <h2 className="font-headline-sm text-headline-sm text-white">AI 行程助手</h2>
                     </div>
                   </div>
                   <button
                     onClick={() => setShowAgent(false)}
-                    className="relative z-10 flex h-8 w-8 items-center justify-center rounded-full text-white/72 transition-all duration-200 hover:bg-white/10 hover:text-white"
+                    className="relative z-10 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full text-white/72 transition-all duration-200 hover:bg-white/10 hover:text-white"
+                    aria-label="关闭 AI 助手"
                   >
                     <Icon name="close" className="text-[20px]" />
                   </button>

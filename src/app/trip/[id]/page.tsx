@@ -1005,11 +1005,11 @@ function TripDetailContent() {
         showAgentDrawer ? "translate-x-0" : "translate-x-full"
       )}>
           {/* Agent header */}
-          <div className="flex items-center justify-between border-b border-outline-variant bg-[linear-gradient(135deg,rgba(15,55,100,0.96),rgba(7,27,51,0.98))] px-4 py-4 text-white">
-            <div className="flex items-center gap-2">
+          <div className="flex items-center justify-between gap-3 border-b border-outline-variant/45 bg-[linear-gradient(135deg,rgba(15,55,100,0.96),rgba(7,27,51,0.98))] px-4 py-3 text-white">
+            <div className="flex min-w-0 items-center gap-2">
               <span className="font-headline-sm text-headline-sm">AI 行程助手</span>
             </div>
-            <div className="flex items-center gap-1">
+            <div className="flex flex-shrink-0 items-center gap-1">
               {(agentVersions?.length ?? 0) > 0 && (
                 <button
                   onClick={() => setShowVersions(!showVersions)}
@@ -1036,8 +1036,12 @@ function TripDetailContent() {
                   日志
                 </button>
               )}
-              <button onClick={() => setShowAgentDrawer(false)} className="ml-2 text-white/74 transition-colors hover:text-white">
-                <Icon name="close" />
+              <button
+                onClick={() => setShowAgentDrawer(false)}
+                className="ml-1 flex h-9 w-9 items-center justify-center rounded-full text-white/74 transition-colors hover:bg-white/10 hover:text-white"
+                aria-label="关闭 AI 助手"
+              >
+                <Icon name="close" className="text-[20px]" />
               </button>
             </div>
           </div>
