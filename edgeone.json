@@ -1,0 +1,15 @@
+{
+  "name": "travel-planner",
+  "installCommand": "npm ci",
+  "buildCommand": "npm run build",
+  "outputDirectory": ".next",
+  "nodeVersion": "22.17.1",
+  "cloudFunctions": {
+    "nodejs": {
+      "maxDuration": 120,
+      "externalNodeModules": [
+        "@amap/amap-jsapi-loader"
+      ]
+    }
+  }
+}

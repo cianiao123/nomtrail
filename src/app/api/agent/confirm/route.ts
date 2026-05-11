@@ -10,7 +10,7 @@ import type { AgentRunSSEEvent, AgentConfirmRequest, ConfirmedPlace } from "@/ty
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 300;
+export const maxDuration = 120;
 
 const AGENT_ROUTE_BUDGET_MS = (maxDuration - 8) * 1000;
 
