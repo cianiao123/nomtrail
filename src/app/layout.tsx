@@ -33,12 +33,6 @@ export default function RootLayout({
       lang="zh-CN"
       className={`${playfairDisplay.variable} ${inter.variable} light h-full antialiased`}
     >
-      <head>
-        <link
-          rel="stylesheet"
-          href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap"
-        />
-      </head>
       <body className="min-h-full flex flex-col bg-background text-on-background selection:bg-primary-container selection:text-on-primary-container">
         <Providers>
           <AppShell>{children}</AppShell>

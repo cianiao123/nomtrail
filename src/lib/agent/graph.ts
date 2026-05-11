@@ -17,6 +17,7 @@
 import { StateGraph, START, END } from "@langchain/langgraph";
 import { TravelAgentAnnotation } from "./state";
 import type { TravelAgentState } from "./state";
+import { isConstrainedServerlessRuntime } from "./runtime";
 import {
   loadContextNode,
   classifyIntentNode,
@@ -85,7 +86,7 @@ function routeAfterConfirm(state: TravelAgentState): string {
 }
 
 function shouldSkipPostGenerationChecks(): boolean {
-  return process.env.VERCEL === "1";
+  return isConstrainedServerlessRuntime();
 }
 
 function routeAfterCollectMissing(state: TravelAgentState): string {

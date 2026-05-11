@@ -63,6 +63,17 @@ const POI_ICONS: Record<string, string> = {
   transport: "directions_bus",
 };
 
+function markerSvg(iconName: string, size: number): string {
+  const common = `width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"`;
+  const paths: Record<string, string> = {
+    directions_bus: '<path d="M8 6h8"/><path d="M6 11h12"/><path d="M6 15h12"/><path d="M7 19h1"/><path d="M16 19h1"/><rect x="5" y="3" width="14" height="16" rx="2"/>',
+    hotel: '<path d="M3 21V7a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v14"/><path d="M15 11h4a2 2 0 0 1 2 2v8"/><path d="M7 10h4"/><path d="M7 14h4"/>',
+    landscape: '<path d="m3 20 7.5-13 4.5 8 2-3.5L21 20H3Z"/><path d="M11 20 8.5 16h7L13 20"/>',
+    restaurant: '<path d="M4 3v8"/><path d="M8 3v8"/><path d="M4 7h4"/><path d="M6 11v10"/><path d="M17 3v18"/><path d="M14 3h6"/>',
+  };
+  return `<svg ${common}>${paths[iconName] ?? '<path d="M12 21s7-5.3 7-11a7 7 0 1 0-14 0c0 5.7 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/>'}</svg>`;
+}
+
 function normalizePoiType(type: string): string {
   return type === "attraction" ? "scenic" : type || "scenic";
 }
@@ -122,9 +133,7 @@ export default function ExplorePage() {
         border:2px solid #fff;cursor:pointer;transition:all 0.25s ease;
         position:relative;
       ">
-        <span class="material-symbols-outlined" style="font-size:${iconSize}px;font-variation-settings:'FILL' 1;">
-          ${iconName}
-        </span>
+        ${markerSvg(iconName, iconSize)}
         ${isActive ? `<div style="
           position:absolute;bottom:-4px;left:50%;transform:translateX(-50%);
           width:6px;height:6px;background:${color};border-radius:50%;

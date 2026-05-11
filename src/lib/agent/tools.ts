@@ -14,6 +14,7 @@ import type {
   SavedPlaceCandidate,
 } from "@/types/agent";
 import { TravelInspirationResultSchema, validateWithSchema } from "./schemas";
+import { isConstrainedServerlessRuntime } from "./runtime";
 
 export interface WebSearchResult {
   query: string;
@@ -33,10 +34,10 @@ export interface XHSNote {
 export const XHS_MCP_ENDPOINT =
   process.env.XHS_MCP_URL || "http://localhost:3456/mcp";
 
-const isVercelRuntime = process.env.VERCEL === "1";
+const isServerlessRuntime = isConstrainedServerlessRuntime();
 const XHS_SEARCH_COUNT = 3;
 const WEB_SEARCH_MAX_USES = 1;
-const POI_ENRICH_LIMIT = isVercelRuntime ? 2 : 6;
+const POI_ENRICH_LIMIT = isServerlessRuntime ? 2 : 6;
 const CANDIDATE_POOL_LIMIT = 8;
 
 function createTimeoutSignal(timeoutMs: number): AbortSignal {
@@ -117,7 +118,7 @@ export async function fetchXHSNote(
   try {
     const res = await fetch(`${XHS_MCP_ENDPOINT}/tools/call`, {
       method: "POST",
-      signal: createTimeoutSignal(isVercelRuntime ? 2500 : 8000),
+      signal: createTimeoutSignal(isServerlessRuntime ? 2500 : 8000),
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         name: "xhs_search",
@@ -176,8 +177,8 @@ async function searchTravelWeb(
       ],
       {
         temperature: 0.2,
-        maxTokens: isVercelRuntime ? 700 : 1800,
-        signal: createTimeoutSignal(isVercelRuntime ? 6500 : 12000),
+        maxTokens: isServerlessRuntime ? 700 : 1800,
+        signal: createTimeoutSignal(isServerlessRuntime ? 6500 : 12000),
       }
     );
 
@@ -225,7 +226,7 @@ async function searchPOIRecord(
       extensions: "all",
     });
     const res = await fetch(`https://restapi.amap.com/v3/place/text?${params}`, {
-      signal: createTimeoutSignal(isVercelRuntime ? 700 : 5000),
+      signal: createTimeoutSignal(isServerlessRuntime ? 700 : 5000),
     });
     const data = (await res.json()) as {
       status?: string;
@@ -440,8 +441,8 @@ ${combineInspirationText(inspirationItems)}
       ],
       {
         temperature: 0.2,
-        maxTokens: isVercelRuntime ? 900 : 2500,
-        signal: createTimeoutSignal(isVercelRuntime ? 4500 : 10000),
+        maxTokens: isServerlessRuntime ? 900 : 2500,
+        signal: createTimeoutSignal(isServerlessRuntime ? 4500 : 10000),
       }
     );
 

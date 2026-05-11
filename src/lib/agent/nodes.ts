@@ -50,6 +50,10 @@ import {
   CRITIQUE_PROMPT,
   NORMALIZE_ACTIVITIES_PROMPT,
 } from "./prompts";
+import {
+  isConstrainedServerlessRuntime,
+  isRequestTerminationError,
+} from "./runtime";
 import type {
   ParsedPlace,
   ItineraryVersion,
@@ -237,9 +241,10 @@ function boundedTimeoutSignal(
 }
 
 function itineraryMaxTokens(dayCount: number): number {
-  const base = process.env.VERCEL === "1" ? 1600 : 2400;
-  const perDay = process.env.VERCEL === "1" ? 450 : 650;
-  return Math.min(process.env.VERCEL === "1" ? 3200 : 5200, base + dayCount * perDay);
+  const constrained = isConstrainedServerlessRuntime();
+  const base = constrained ? 1600 : 2400;
+  const perDay = constrained ? 450 : 650;
+  return Math.min(constrained ? 3200 : 5200, base + dayCount * perDay);
 }
 
 function itineraryCompletenessIssue(
@@ -259,9 +264,7 @@ function itineraryCompletenessIssue(
 }
 
 function isAbortError(err: unknown): boolean {
-  const message = err instanceof Error ? err.message : String(err);
-  return err instanceof DOMException && err.name === "AbortError"
-    || /abort|aborted|operation was aborted/i.test(message);
+  return isRequestTerminationError(err);
 }
 
 function estimateGeneratedCost(
@@ -1341,7 +1344,7 @@ export async function generateItineraryNode(
       const hasInspirationContext =
         (state.inspirationItems?.length ?? 0) > 0
         || savedCandidates.length > 0;
-      if (!(process.env.VERCEL === "1" && hasInspirationContext)) {
+      if (!(isConstrainedServerlessRuntime() && hasInspirationContext)) {
         const destPlace = { name: destination, category: "attraction" as const, priority: "want_to_go" as const, sourceText: destination, id: "", estimatedDuration: 60 };
         const results = await searchMultiplePlaces([destPlace], 1);
         enrichedContext = buildEnrichedContext(results);
