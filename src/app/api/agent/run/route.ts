@@ -27,7 +27,7 @@ async function loadSession(threadId: string): Promise<TravelAgentState | null> {
   const { data } = await supabase
     .from("agent_sessions")
     .select("state_data")
-    .eq("id", threadId)
+    .eq("thread_id", threadId)
     .maybeSingle();
   return (data?.state_data as TravelAgentState) ?? null;
 }
@@ -35,15 +35,30 @@ async function loadSession(threadId: string): Promise<TravelAgentState | null> {
 async function saveSession(state: TravelAgentState, status: string) {
   try {
     const supabase = getSupabase();
-    const { error } = await supabase.from("agent_sessions").upsert({
-      id: state.threadId,
+    const payload = {
       thread_id: state.threadId,
       user_id: state.userId || "local-user",
       trip_id: state.tripId || null,
       status,
       state_data: JSON.parse(JSON.stringify(state)), // ensure serializable
       updated_at: new Date().toISOString(),
-    }, { onConflict: "id" });
+    };
+
+    const { data: existing, error: findError } = await supabase
+      .from("agent_sessions")
+      .select("id")
+      .eq("thread_id", state.threadId)
+      .maybeSingle();
+    if (findError) throw findError;
+
+    const { error } = existing
+      ? await supabase
+        .from("agent_sessions")
+        .update(payload)
+        .eq("thread_id", state.threadId)
+      : await supabase
+        .from("agent_sessions")
+        .insert({ id: crypto.randomUUID(), ...payload });
     if (error) {
       // Surface save error in the debug output
       (state as Record<string, unknown>)._saveError = JSON.stringify(error);

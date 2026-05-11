@@ -634,7 +634,7 @@ export async function classifyIntentNode(
       .replace("{missingInfo}", (state.missingInfo ?? []).join(", ") || "无")
       .replace("{userMessage}", msg);
 
-    const parsed = await deepseekClient.generateJson(
+    let parsed = await deepseekClient.generateJson(
       [
         { role: "system", content: "意图分类。只输出JSON。" },
         { role: "user", content: prompt },
@@ -737,7 +737,7 @@ export async function recommendDestinationsNode(
       state.currentMessage ?? ""
     );
 
-    const parsed = await deepseekClient.generateJson(
+    let parsed = await deepseekClient.generateJson(
       [
         { role: "system", content: "你是旅行目的地推荐顾问。只输出合法 JSON。" },
         { role: "user", content: prompt },
@@ -851,7 +851,7 @@ export async function parsePlacesNode(
   try {
     const prompt = PARSE_PLACES_PROMPT.replace("{userMessage}", msg);
 
-    const parsed = await deepseekClient.generateJson(
+    let parsed = await deepseekClient.generateJson(
       [
         {
           role: "system",
@@ -1052,7 +1052,7 @@ export async function generateItineraryNode(
       .replace("{inspirationSummary}", inspirationSummary || "无")
       .replace("{enrichedContext}", enrichedContext || "无实时数据");
 
-    const parsed = await deepseekClient.generateJson(
+    let parsed = await deepseekClient.generateJson(
       [
         {
           role: "system",
@@ -1064,11 +1064,38 @@ export async function generateItineraryNode(
       { temperature: 0.3, maxTokens: 4096 }
     );
 
-    const validated = validateWithSchema(
+    let validated = validateWithSchema(
       GenerateItineraryResultSchema,
       parsed,
       "generate_itinerary"
     );
+
+    if (validated.days.length !== dayCount) {
+      parsed = await deepseekClient.generateJson(
+        [
+          {
+            role: "system",
+            content:
+              "你是专业旅行规划师。只输出合法JSON。",
+          },
+          {
+            role: "user",
+            content:
+              `${prompt}\n\n上一次输出了 ${validated.days.length} 天，但本次必须输出完整 ${dayCount} 天。请重新生成，days数组长度必须等于${dayCount}，dayIndex必须从1连续到${dayCount}。`,
+          },
+        ],
+        { temperature: 0.2, maxTokens: 4096 }
+      );
+      validated = validateWithSchema(
+        GenerateItineraryResultSchema,
+        parsed,
+        "generate_itinerary"
+      );
+    }
+
+    if (validated.days.length !== dayCount) {
+      throw new Error(`行程天数不匹配：需要 ${dayCount} 天，实际生成 ${validated.days.length} 天`);
+    }
     const wishlistNames = extractWishlistNames(state);
 
     // Convert to Day[] shape compatible with existing Trip type

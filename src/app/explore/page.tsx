@@ -300,10 +300,10 @@ export default function ExplorePage() {
   }, [router, selectedCity.name, wishlist]);
 
   return (
-    <div className="h-[calc(100vh-64px)] px-4 pb-4 pt-4 md:px-6">
-      <div className="flex h-full flex-col overflow-hidden rounded-[28px] border border-outline-variant/60 bg-[rgba(247,251,255,0.82)] shadow-[0_24px_70px_rgba(8,35,69,0.10)] lg:flex-row">
+    <div className="h-full overflow-hidden px-4 pb-4 pt-4 md:px-6">
+      <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-[28px] border border-outline-variant/60 bg-[rgba(247,251,255,0.82)] shadow-[0_24px_70px_rgba(8,35,69,0.10)] lg:flex-row">
       {/* Left Panel */}
-      <div className="flex w-full flex-col overflow-hidden border-b border-outline-variant/60 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(237,244,251,0.92))] lg:w-[400px] lg:border-b-0 lg:border-r xl:w-[440px]">
+      <div className="flex min-h-0 w-full flex-col overflow-hidden border-b border-outline-variant/60 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(237,244,251,0.92))] lg:w-[400px] lg:border-b-0 lg:border-r xl:w-[440px]">
         <div className="border-b border-outline-variant/55 px-5 py-5">
           <p className="mb-2 text-[11px] uppercase tracking-[0.2em] text-primary">Destination Salon</p>
           <h1 className="mb-4 font-display text-[2rem] leading-tight text-primary">探索目的地</h1>
@@ -389,7 +389,7 @@ export default function ExplorePage() {
         </div>
 
         {/* POI List */}
-        <div className="flex-1 overflow-y-auto p-5">
+        <div className="min-h-0 flex-1 overflow-y-auto p-5">
           {loading ? (
             <div className="flex items-center justify-center py-12">
               <LoadingSpinner />

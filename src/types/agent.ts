@@ -101,7 +101,7 @@ export interface CritiqueIssue {
   severity: 'error' | 'warning' | 'info';
   dayIndex: number;
   activityIndex?: number;
-  category: 'overpacked' | 'geography' | 'timing' | 'weather' | 'budget' | 'child_unfriendly' | 'other' | 'rest' | 'logistics';
+  category: 'overpacked' | 'geo' | 'geography' | 'timing' | 'weather' | 'budget' | 'booking' | 'child_unfriendly' | 'other' | 'rest' | 'logistics' | 'feasibility';
   message: string;
   suggestion: string;
 }

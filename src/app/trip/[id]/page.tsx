@@ -513,30 +513,33 @@ function TripDetailContent() {
     })
   );
 
-  // Load trip from store or API on mount
+  // Load cached trip quickly, then always refresh from API to avoid stale localStorage data.
   useEffect(() => {
-    if (!currentTrip || currentTrip.id !== tripId) {
-      // Try Zustand persist store first
-      const stored = loadTrip(tripId);
-      if (stored) {
-        setCurrentTrip(stored);
-        queueMicrotask(() => setLoadingTrip(false));
-        return;
-      }
-      // Fallback: fetch from API
-      fetch(`/api/trips/${tripId}`)
-        .then((r) => r.json())
-        .then((res) => {
-          if (res.success && res.data) {
-            saveTrip(res.data);
-            setCurrentTrip(res.data);
-          }
-        })
-        .catch(() => {})
-        .finally(() => setLoadingTrip(false));
-    } else {
+    let cancelled = false;
+    const stored = loadTrip(tripId);
+
+    if (stored && (!currentTrip || currentTrip.id !== tripId)) {
+      setCurrentTrip(stored);
       queueMicrotask(() => setLoadingTrip(false));
     }
+
+    fetch(`/api/trips/${tripId}`)
+      .then((r) => r.json())
+      .then((res) => {
+        if (cancelled) return;
+        if (res.success && res.data) {
+          saveTrip(res.data);
+          setCurrentTrip(res.data);
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setLoadingTrip(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [tripId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const trip = currentTrip;

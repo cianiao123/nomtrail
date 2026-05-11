@@ -32,7 +32,7 @@ export async function POST(req: NextRequest) {
   const { data: session } = await supabase
     .from("agent_sessions")
     .select("state_data")
-    .eq("id", threadId)
+    .eq("thread_id", threadId)
     .maybeSingle();
 
   if (!session?.state_data) {
@@ -56,6 +56,7 @@ export async function POST(req: NextRequest) {
   savedState.needsHumanConfirmation = false;
   savedState.pendingConfirmationType = undefined;
   savedState.pendingMessage = "";
+  savedState.responsePayload = undefined;
   const isEditingExistingTrip =
     !!(savedState.tripId || savedState.trip || savedState.itineraryDraft?.days?.length || (savedState.versions?.length ?? 0) > 0);
   savedState.intent = isEditingExistingTrip ? "reviseItinerary" : "generateItinerary";
@@ -88,11 +89,27 @@ export async function POST(req: NextRequest) {
             { role: "agent" as const, content: result.assistantMessage },
           ];
         }
-        await supabase.from("agent_sessions").upsert({
-          id: result.threadId, thread_id: result.threadId,
+        const payload = {
+          thread_id: result.threadId,
           user_id: result.userId || savedState.userId || "local-user", trip_id: result.tripId || null,
           status: "completed", state_data: result, updated_at: new Date().toISOString(),
-        }, { onConflict: "id" });
+        };
+        const { data: existingSession, error: findError } = await supabase
+          .from("agent_sessions")
+          .select("id")
+          .eq("thread_id", result.threadId)
+          .maybeSingle();
+        if (findError) throw findError;
+
+        const { error: saveError } = existingSession
+          ? await supabase
+            .from("agent_sessions")
+            .update(payload)
+            .eq("thread_id", result.threadId)
+          : await supabase
+            .from("agent_sessions")
+            .insert({ id: crypto.randomUUID(), ...payload });
+        if (saveError) throw saveError;
 
         emit({ type: "complete", intent: result.intent, message: result.assistantMessage || undefined,
           data: {

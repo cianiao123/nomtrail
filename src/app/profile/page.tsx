@@ -22,6 +22,7 @@ export default function ProfilePage() {
   const tripIds = useTripStore((s) => s.tripIds);
   const saveTrip = useTripStore((s) => s.saveTrip);
   const removeTrip = useTripStore((s) => s.removeTrip);
+  const [deletingTripIds, setDeletingTripIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!userProfile?.id) return;
@@ -43,6 +44,26 @@ export default function ProfilePage() {
     await createClient().auth.signOut();
     logout();
     router.push("/");
+  }
+
+  async function handleDeleteTrip(tripId: string) {
+    setDeletingTripIds((prev) => new Set(prev).add(tripId));
+    try {
+      const res = await fetch(`/api/trips/${tripId}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "删除失败");
+      }
+      removeTrip(tripId);
+    } catch (err) {
+      console.error("[profile] delete trip failed:", err);
+    } finally {
+      setDeletingTripIds((prev) => {
+        const next = new Set(prev);
+        next.delete(tripId);
+        return next;
+      });
+    }
   }
 
   if (!isAuthenticated) {
@@ -151,9 +172,10 @@ export default function ProfilePage() {
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          removeTrip(trip.id);
+                          handleDeleteTrip(trip.id);
                         }}
-                        className="text-error/50 transition-colors hover:text-error"
+                        disabled={deletingTripIds.has(trip.id)}
+                        className="text-error/50 transition-colors hover:text-error disabled:cursor-not-allowed disabled:opacity-35"
                       >
                         <Icon name="delete" className="text-[18px]" />
                       </button>

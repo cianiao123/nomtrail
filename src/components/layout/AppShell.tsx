@@ -29,7 +29,14 @@ export function AppShell({ children }: { children: ReactNode }) {
     <>
       {!isTripPage && !isLoginPage && <TopNavBar />}
       <div className="relative mx-auto flex w-full max-w-[1920px] flex-1">
-        <main className="relative min-h-screen flex-1 pb-24 lg:pb-0">
+        <main
+          className={cn(
+            "relative flex-1",
+            isExplorePage
+              ? "h-[calc(100dvh-92px)] overflow-hidden pb-0 lg:h-[calc(100dvh-76px)]"
+              : "min-h-screen pb-24 lg:pb-0"
+          )}
+        >
           {children}
         </main>
       </div>

@@ -100,10 +100,12 @@ export const CritiqueIssueSchema = z.object({
   activityIndex: z.number().nullable().optional(),
   category: z.enum([
     "overpacked",
+    "geo",
     "geography",
     "timing",
     "weather",
     "budget",
+    "booking",
     "child_unfriendly",
     "other",
     "rest",
