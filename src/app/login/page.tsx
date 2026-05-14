@@ -216,6 +216,10 @@ function LoginPageContent() {
                 />
               </button>
             </div>
+            <p className="flex items-center justify-center gap-2 rounded-full border border-white/16 bg-white/8 px-4 py-2 text-center text-xs text-white/62 backdrop-blur-md">
+              <Icon name="public" className="text-[15px]" />
+              可以连接 VPN 提高访问速度（香港节点最佳）
+            </p>
           </form>
         </div>
         </div>

@@ -64,6 +64,10 @@ export function HeroSection() {
                 <Icon name="edit_note" className="text-[27px] transition-transform duration-300 group-hover:rotate-[-4deg]" />
               </Link>
             </div>
+            <p className="animate-fade-up stagger-3 mt-5 inline-flex items-center gap-2 rounded-full border border-white/18 bg-white/10 px-4 py-2 text-xs text-white/72 backdrop-blur-md">
+              <Icon name="public" className="text-[15px]" />
+              可以连接 VPN 提高访问速度（香港节点最佳）
+            </p>
 
             <a
               href="#destinations"
