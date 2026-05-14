@@ -73,6 +73,7 @@ Required values:
 
 ```txt
 NEXT_PUBLIC_AMAP_KEY=your_amap_js_api_key
+NEXT_PUBLIC_AMAP_SECURITY_JS_CODE=your_amap_js_api_security_code
 NEXT_PUBLIC_AMAP_WEB_KEY=your_amap_web_service_key
 NEXT_PUBLIC_SUPABASE_URL=your_supabase_project_url
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key

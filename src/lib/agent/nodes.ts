@@ -54,6 +54,7 @@ import {
   isConstrainedServerlessRuntime,
   isRequestTerminationError,
 } from "./runtime";
+import { formatAgentNodeName } from "./agents/registry";
 import type {
   ParsedPlace,
   ItineraryVersion,
@@ -81,10 +82,11 @@ function logAction(
   output: string,
   durationMs: number
 ): AgentActionLogEntry {
+  const agentNodeName = formatAgentNodeName(nodeName);
   return {
-    id: `${state.threadId}-${nodeName}-${Date.now()}`,
+    id: `${state.threadId}-${agentNodeName}-${Date.now()}`,
     timestamp: new Date().toISOString(),
-    nodeName,
+    nodeName: agentNodeName,
     intent: state.intent,
     input: state.currentMessage?.slice(0, 200) ?? "",
     output: output.slice(0, 500),
@@ -1256,6 +1258,9 @@ export async function researchInspirationNode(
       actionLog: [
         logAction(state, "xhs_search", `xhs=${result.debug.xhsCount}`, Date.now() - t0),
         logAction(state, "web_search", `web=${result.debug.webCount}`, Date.now() - t0),
+        ...result.debug.verticals.map((nodeName) =>
+          logAction(state, nodeName, "completed", Date.now() - t0)
+        ),
         logAction(state, "extract_places", `items=${result.inspirationItems.length}`, Date.now() - t0),
         logAction(state, "dedupe_candidates", `candidates=${result.savedPlaceCandidates.length}`, Date.now() - t0),
         logAction(state, "poi_enrich", candidateContext || "none", Date.now() - t0),

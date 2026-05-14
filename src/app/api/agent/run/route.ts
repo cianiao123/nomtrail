@@ -8,6 +8,7 @@ import { NextRequest } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { travelAgentGraph } from "@/lib/agent/graph";
 import { createInitialAgentState } from "@/lib/agent/sessionContext";
+import { formatAgentNodeName } from "@/lib/agent/agents/registry";
 import type { TravelAgentState } from "@/lib/agent/state";
 import type { AgentRunRequest, AgentRunSSEEvent } from "@/types/agent";
 
@@ -108,12 +109,12 @@ export async function POST(req: NextRequest) {
         });
 
         const progressEvents: Array<{ node: string; message: string }> = [
-          { node: "START", message: "正在读取你的旅行需求" },
-          { node: "parse_trip", message: "正在确认目的地、天数、人数和预算" },
-          { node: "research_inspiration", message: "正在搜索攻略与种草内容" },
-          { node: "extract_places", message: "正在把攻略整理成候选地点池" },
-          { node: "budget_check", message: "正在按预算区间校准活动费用" },
-          { node: "generate_itinerary", message: "正在生成每日行程安排" },
+          { node: formatAgentNodeName("load_context"), message: "正在读取你的旅行需求" },
+          { node: formatAgentNodeName("parse_trip"), message: "正在确认目的地、天数、人数和预算" },
+          { node: formatAgentNodeName("research_inspiration"), message: "正在搜索攻略与种草内容" },
+          { node: formatAgentNodeName("extract_places"), message: "正在把攻略整理成候选地点池" },
+          { node: formatAgentNodeName("critique_itinerary"), message: "正在按预算区间校准活动费用" },
+          { node: formatAgentNodeName("generate_itinerary"), message: "正在生成每日行程安排" },
         ];
         let progressIndex = 0;
         emit({ type: "step", ...progressEvents[progressIndex] });

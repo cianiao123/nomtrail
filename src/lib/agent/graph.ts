@@ -1,5 +1,12 @@
 /**
- * LangGraph StateGraph for Travel Planning Agent — all nodes.
+ * LangGraph StateGraph for Travel Planning Agent.
+ *
+ * Architecture:
+ *   A supervisor graph routes requests across specialist agents:
+ *   requirement_agent, research_agent, geo_resolver_agent, planner_agent,
+ *   validator_agent, persistence_agent, conversation_agent, and export_agent.
+ *   Each specialist is represented by one or more graph nodes and records
+ *   agent-prefixed action logs, e.g. research_agent.web_search.
  *
  * Graph:
  *   START → load_context → classify_intent → route_by_intent

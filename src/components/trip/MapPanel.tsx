@@ -45,10 +45,10 @@ function loadAMapSDK(): Promise<AMapApi> {
   if (AMapInstance) return Promise.resolve(AMapInstance);
   if (AMapLoaderPromise) return AMapLoaderPromise;
 
-  (window as Window & { _AMapSecurityConfig?: { securityJsCode: string } })._AMapSecurityConfig = { securityJsCode: "" };
-
   AMapLoaderPromise = import("@amap/amap-jsapi-loader")
-    .then((mod) => {
+    .then(async (mod) => {
+      const { configureAMapSecurity } = await import("@/lib/map/amapLoader");
+      configureAMapSecurity();
       const loader = mod.default || mod;
       return loader.load({
         key: process.env.NEXT_PUBLIC_AMAP_KEY || "",

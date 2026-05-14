@@ -5,6 +5,7 @@
 import { NextRequest } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { travelAgentGraph } from "@/lib/agent/graph";
+import { formatAgentNodeName } from "@/lib/agent/agents/registry";
 import type { TravelAgentState } from "@/lib/agent/state";
 import type { AgentRunSSEEvent, AgentConfirmRequest, ConfirmedPlace } from "@/types/agent";
 
@@ -76,10 +77,10 @@ export async function POST(req: NextRequest) {
         savedState.requestStartedAt = requestStartedAt;
         savedState.requestDeadlineAt = requestStartedAt + AGENT_ROUTE_BUDGET_MS;
 
-        emit({ type: "step", node: "confirm_places", message: "Resuming..." });
+        emit({ type: "step", node: formatAgentNodeName("confirm_places"), message: "Resuming..." });
         emit({
           type: "step",
-          node: isEditingExistingTrip ? "revise_itinerary" : "research_inspiration",
+          node: formatAgentNodeName(isEditingExistingTrip ? "revise_itinerary" : "research_inspiration"),
           message: isEditingExistingTrip ? "正在调整当前行程..." : "正在搜索种草攻略...",
         });
         const result = (await travelAgentGraph.invoke({ ...savedState }, {

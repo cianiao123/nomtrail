@@ -6,7 +6,7 @@
 -- ============================================================
 CREATE TABLE IF NOT EXISTS trips (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id         UUID NOT NULL,
+  user_id         TEXT NOT NULL,
   title           TEXT NOT NULL DEFAULT '未命名行程',
   destination     TEXT NOT NULL DEFAULT '',
   destination_lat DOUBLE PRECISION,

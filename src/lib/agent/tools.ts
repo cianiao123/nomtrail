@@ -7,6 +7,12 @@
  */
 
 import { deepseekClient } from "@/lib/llm/deepseekClient";
+import { mapConcurrent } from "@/lib/utils/async";
+import {
+  RESEARCH_VERTICALS,
+  buildResearchQuery,
+  type ResearchVerticalAgent,
+} from "./agents/researchVerticals";
 import type {
   ParsedPlace,
   ConfirmedPlace,
@@ -86,14 +92,13 @@ export async function searchMultiplePlaces(
   places: (ParsedPlace | ConfirmedPlace)[],
   limit = 3
 ): Promise<Record<string, WebSearchResult>> {
-  const results: Record<string, WebSearchResult> = {};
   const toSearch = places.slice(0, Math.min(places.length, limit));
+  const entries = await mapConcurrent(toSearch, isServerlessRuntime ? 2 : 3, async (place) => [
+    place.name,
+    await searchPlaceInfo(place),
+  ] as const);
 
-  for (const place of toSearch) {
-    results[place.name] = await searchPlaceInfo(place);
-  }
-
-  return results;
+  return Object.fromEntries(entries);
 }
 
 export function buildEnrichedContext(
@@ -152,20 +157,21 @@ export async function extractPlacesFromXHS(
 async function searchTravelWeb(
   destination: string,
   preferences: string[],
-  dayCount: number
+  dayCount: number,
+  vertical: ResearchVerticalAgent
 ): Promise<WebSearchResult[]> {
-  const query = `${destination} ${dayCount}天 ${preferences.join(" ")} 旅游攻略 美食 逛街 景点`;
+  const query = buildResearchQuery(destination, preferences, dayCount, vertical.id);
   try {
     const result = await deepseekClient.generateWithTools!(
       [
         {
           role: "system",
           content:
-            "You are a travel research assistant. Search for up-to-date destination guides, itineraries, neighborhood suggestions, food spots, and practical tips. Summarize only the useful travel takeaways.",
+            `You are the ${vertical.title} specialist. Search for up-to-date travel information. Focus only on: ${vertical.focus}. Summarize practical takeaways for itinerary generation.`,
         },
         {
           role: "user",
-          content: `Search for useful travel inspiration and practical planning info for: ${query}`,
+          content: `Search for useful ${vertical.title} inspiration and practical planning info for: ${query}`,
         },
       ],
       [
@@ -361,13 +367,17 @@ export async function searchTravelInspiration(
     xhsCount: number;
     webCount: number;
     enrichedCount: number;
+    verticals: string[];
   };
 }> {
   const xhsKeyword = `${destination} ${dayCount}天 ${preferences.join(" ")} 小红书 攻略`;
-  const [xhsNotes, webResults] = await Promise.all([
+  const [xhsNotes, verticalWebResults] = await Promise.all([
     fetchXHSNote(xhsKeyword),
-    searchTravelWeb(destination, preferences, dayCount),
+    Promise.all(RESEARCH_VERTICALS.map((vertical) =>
+      searchTravelWeb(destination, preferences, dayCount, vertical)
+    )),
   ]);
+  const webResults = verticalWebResults.flat();
 
   const xhsItems: InspirationItem[] = xhsNotes.map((note) => ({
     title: note.title,
@@ -397,7 +407,7 @@ export async function searchTravelInspiration(
     return {
       inspirationItems: [],
       savedPlaceCandidates: [],
-      debug: { xhsCount: 0, webCount: 0, enrichedCount: 0 },
+      debug: { xhsCount: 0, webCount: 0, enrichedCount: 0, verticals: [] },
     };
   }
 
@@ -480,18 +490,21 @@ ${combineInspirationText(inspirationItems)}
   }
 
   const candidatePool = validated.savedPlaceCandidates.slice(0, CANDIDATE_POOL_LIMIT);
-  const enrichedCandidates: SavedPlaceCandidate[] = [];
-  for (const candidate of candidatePool.slice(0, POI_ENRICH_LIMIT)) {
-    const poi = await searchPOIRecord(candidate.name, candidate.city || destination);
-    enrichedCandidates.push({
-      ...candidate,
-      category: normalizeCategory(candidate.category),
-      coordinate: candidate.coordinate ?? poi.coordinate,
-      address: candidate.address ?? poi.address,
-      openingHours: candidate.openingHours ?? poi.openingHours,
-      ticketReference: candidate.ticketReference ?? poi.ticketReference,
-    });
-  }
+  const enrichedCandidates = await mapConcurrent(
+    candidatePool.slice(0, POI_ENRICH_LIMIT),
+    isServerlessRuntime ? 2 : 4,
+    async (candidate) => {
+      const poi = await searchPOIRecord(candidate.name, candidate.city || destination);
+      return {
+        ...candidate,
+        category: normalizeCategory(candidate.category),
+        coordinate: candidate.coordinate ?? poi.coordinate,
+        address: candidate.address ?? poi.address,
+        openingHours: candidate.openingHours ?? poi.openingHours,
+        ticketReference: candidate.ticketReference ?? poi.ticketReference,
+      };
+    }
+  );
   const enrichmentKeys = new Set(enrichedCandidates.map((candidate) => normalizeCandidateKey(candidate.name)));
   const remainingCandidates = candidatePool
     .filter((candidate) => !enrichmentKeys.has(normalizeCandidateKey(candidate.name)))
@@ -508,6 +521,7 @@ ${combineInspirationText(inspirationItems)}
       xhsCount: xhsItems.length,
       webCount: webItems.length,
       enrichedCount: savedPlaceCandidates.length,
+      verticals: RESEARCH_VERTICALS.map((vertical) => vertical.nodeName),
     },
   };
 }

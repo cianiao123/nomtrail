@@ -189,14 +189,16 @@ export default function ExplorePage() {
     if (!containerRef.current) return;
     let destroyed = false;
 
-    (window as any)._AMapSecurityConfig = { securityJsCode: "" };
-
     import("@amap/amap-jsapi-loader")
-      .then((mod) => (mod.default || mod).load({
-        key: process.env.NEXT_PUBLIC_AMAP_KEY || "",
-        version: "2.0",
-        plugins: ["AMap.Scale", "AMap.PlaceSearch", "AMap.Geocoder", "AMap.Marker", "AMap.InfoWindow"],
-      }))
+      .then(async (mod) => {
+        const { configureAMapSecurity } = await import("@/lib/map/amapLoader");
+        configureAMapSecurity();
+        return (mod.default || mod).load({
+          key: process.env.NEXT_PUBLIC_AMAP_KEY || "",
+          version: "2.0",
+          plugins: ["AMap.Scale", "AMap.PlaceSearch", "AMap.Geocoder", "AMap.Marker", "AMap.InfoWindow"],
+        });
+      })
       .then((AMap: any) => {
         if (destroyed || !containerRef.current) return;
         AMapRef.current = AMap;
