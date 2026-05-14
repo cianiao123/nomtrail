@@ -50,13 +50,13 @@ If the code is in a Git repository:
 sudo mkdir -p /var/www
 sudo chown -R $USER:$USER /var/www
 git clone YOUR_REPOSITORY_URL /var/www/travel-planner
-cd /var/www/travel-planner/frontend
+cd /var/www/travel-planner
 ```
 
-If you upload the folder manually, put this `frontend` directory at:
+If you upload the folder manually, put this project directory at:
 
 ```txt
-/var/www/travel-planner/frontend
+/var/www/travel-planner
 ```
 
 ## 5. Configure Environment Variables
@@ -64,7 +64,7 @@ If you upload the folder manually, put this `frontend` directory at:
 Create the production environment file:
 
 ```bash
-cd /var/www/travel-planner/frontend
+cd /var/www/travel-planner
 cp .env.example .env.production
 nano .env.production
 ```
@@ -207,11 +207,64 @@ npm run pm2:restart
 ## 10. Future Updates
 
 ```bash
-cd /var/www/travel-planner/frontend
+cd /var/www/travel-planner
 git pull
 npm ci
 npm run build
 npm run pm2:restart
+```
+
+## 11. Optional GitHub Actions Auto Deploy
+
+The repository includes `.github/workflows/deploy.yml`. After setup, every push to `main` deploys to this server automatically.
+
+Create a deploy SSH key on your local computer:
+
+```bash
+ssh-keygen -t ed25519 -C "github-actions-nomtrail" -f ~/.ssh/nomtrail_actions_deploy
+```
+
+Add the public key to the server:
+
+```bash
+cat ~/.ssh/nomtrail_actions_deploy.pub
+```
+
+Copy that output. On the server:
+
+```bash
+mkdir -p ~/.ssh
+chmod 700 ~/.ssh
+nano ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/authorized_keys
+```
+
+Paste the public key into `authorized_keys`.
+
+Add these GitHub repository secrets:
+
+```txt
+TENCENT_HOST=101.32.186.10
+TENCENT_USER=ubuntu
+TENCENT_SSH_KEY=<contents of ~/.ssh/nomtrail_actions_deploy>
+```
+
+Get the private key value for `TENCENT_SSH_KEY`:
+
+```bash
+cat ~/.ssh/nomtrail_actions_deploy
+```
+
+GitHub path:
+
+```txt
+Repository -> Settings -> Secrets and variables -> Actions -> New repository secret
+```
+
+After the secrets are set, push to `main` or run the workflow manually from:
+
+```txt
+Repository -> Actions -> Deploy to Tencent Cloud -> Run workflow
 ```
 
 ## Troubleshooting
