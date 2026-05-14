@@ -43,13 +43,21 @@ function computeEndDate(startDate: string, dayCount: number) {
   return addDays(startDate, Math.max(0, dayCount - 1));
 }
 
+function normalizeDisplayDays(days: Day[] | undefined): Day[] {
+  return (days ?? []).map((day, index) => ({
+    ...day,
+    dayIndex: typeof day.dayIndex === "number" ? day.dayIndex : index,
+    activities: Array.isArray(day.activities) ? day.activities : [],
+  }));
+}
+
 function syncTripDaysWithMeta(
   trip: Trip,
   startDate: string,
   dayCount: number
 ): { trip: Trip | null; error?: string } {
   const targetCount = Math.max(1, dayCount);
-  const sortedDays = [...trip.days].sort((a, b) => a.dayIndex - b.dayIndex);
+  const sortedDays = normalizeDisplayDays(trip.days).sort((a, b) => a.dayIndex - b.dayIndex);
 
   if (targetCount < sortedDays.length) {
     const removedDays = sortedDays.slice(targetCount);
@@ -285,7 +293,8 @@ function DayCard({
   onOpenForm: (dayId: string) => void;
   onEditActivity: (activity: Activity) => void;
 }) {
-  const activityIds = day.activities.map((a) => a.id);
+  const activities = Array.isArray(day.activities) ? day.activities : [];
+  const activityIds = activities.map((a) => a.id);
 
   return (
     <div className={cn("transition-all", !isSelected && "hidden")} onClick={onSelect}>
@@ -297,7 +306,7 @@ function DayCard({
           <h2 className="font-display text-[1.65rem] leading-tight text-on-surface">Day {dayIndex + 1} 概览</h2>
         </div>
         <div className="pb-1 text-right">
-          <p className="font-label-md text-label-md tracking-[0.16em] text-on-surface">{day.activities.length} 个活动</p>
+          <p className="font-label-md text-label-md tracking-[0.16em] text-on-surface">{activities.length} 个活动</p>
           {day.weather && (
             <p className="mt-1 font-caption text-on-surface-variant">
               {day.weather.tempLow}°~{day.weather.tempHigh}° {day.weather.condition}
@@ -306,7 +315,7 @@ function DayCard({
         </div>
       </div>
 
-      {day.activities.length === 0 ? (
+      {activities.length === 0 ? (
         <div className="flex min-h-[260px] flex-col items-center justify-center rounded-xl border border-outline-variant/70 bg-white/62 px-6 py-8 text-center">
           <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-xl bg-surface-container text-primary">
             <Icon name="edit_calendar" className="text-[28px]" />
@@ -332,7 +341,7 @@ function DayCard({
             items={activityIds}
             strategy={verticalListSortingStrategy}
           >
-            {[...day.activities]
+            {[...activities]
               .sort((a, b) => a.order - b.order)
               .map((activity) => (
                 <SortableActivityCard
@@ -361,7 +370,7 @@ function DayCard({
 
 /* ====== Weather Panel ====== */
 function WeatherPanel({ days }: { days: Day[] }) {
-  const daysWithWeather = days.filter((d) => d.weather);
+  const daysWithWeather = normalizeDisplayDays(days).filter((d) => d.weather);
   if (daysWithWeather.length === 0) return null;
 
   return (
@@ -386,16 +395,17 @@ function WeatherPanel({ days }: { days: Day[] }) {
 
 /* ====== Budget Estimate ====== */
 function BudgetEstimate({ days }: { days: Day[] }) {
-  const totalActivities = days.reduce((sum, d) => sum + d.activities.length, 0);
+  const safeDays = normalizeDisplayDays(days);
+  const totalActivities = safeDays.reduce((sum, d) => sum + d.activities.length, 0);
   const totalCost = days.reduce(
-    (sum, d) => sum + d.activities.reduce((s, a) => s + (a.estimatedCost || 0), 0),
+    (sum, d) => sum + (Array.isArray(d.activities) ? d.activities : []).reduce((s, a) => s + (a.estimatedCost || 0), 0),
     0
   );
-  const transportCost = days.reduce(
+  const transportCost = safeDays.reduce(
     (sum, d) => sum + d.activities.reduce((s, a) => s + (a.type === "transport" ? a.estimatedCost || 0 : 0), 0),
     0
   );
-  const lodgingCost = days.reduce(
+  const lodgingCost = safeDays.reduce(
     (sum, d) => sum + d.activities.reduce((s, a) => s + (a.type === "hotel" ? a.estimatedCost || 0 : 0), 0),
     0
   );
@@ -552,12 +562,13 @@ function TripDetailContent() {
 
   const trip = currentTrip?.id === tripId ? currentTrip : null;
   // Generate placeholder days from date range if no days exist yet
-  const displayDays = (trip?.days?.length ?? 0) > 0
-    ? trip!.days
+  const normalizedTripDays = normalizeDisplayDays(trip?.days);
+  const displayDays = normalizedTripDays.length > 0
+    ? normalizedTripDays
     : generatePlaceholderDays(trip?.startDate, trip?.endDate);
   const derivedDayCount = trip
     ? Math.max(
-        trip.days.length || 0,
+        normalizedTripDays.length || 0,
         Math.ceil((new Date(trip.endDate).getTime() - new Date(trip.startDate).getTime()) / 86400000) + 1
       )
     : 1;
@@ -684,14 +695,14 @@ function TripDetailContent() {
     const overId = String(over.id);
     if (activeId === overId) return;
 
-    const sourceDay = trip.days.find((day) =>
+    const sourceDay = normalizeDisplayDays(trip.days).find((day) =>
       day.activities.some((activity) => activity.id === activeId)
     );
     if (!sourceDay) return;
 
     const targetDayId = overId.startsWith("day-drop-")
       ? overId.replace("day-drop-", "")
-      : trip.days.find((day) => day.activities.some((activity) => activity.id === overId))?.id;
+      : normalizeDisplayDays(trip.days).find((day) => day.activities.some((activity) => activity.id === overId))?.id;
     if (!targetDayId) return;
 
     const targetDay = trip.days.find((day) => day.id === targetDayId);
