@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils/cn";
 import { LoadingSpinner } from "@/components/shared/LoadingSpinner";
 import { ACTIVITY_TYPE_ICONS, ACTIVITY_TYPE_LABELS } from "@/lib/constants";
 import type { Activity } from "@/types/trip";
+import { searchPoiWithAmapSdk } from "@/lib/poi/clientSearch";
 
 interface POISuggestion {
   id: string;
@@ -41,6 +42,7 @@ export function AddActivityForm({ dayId, cityName, onAdd, onClose, initialActivi
   const [suggestions, setSuggestions] = useState<POISuggestion[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedPOI, setSelectedPOI] = useState<POISuggestion | null>(null);
+  const [searchError, setSearchError] = useState("");
   const [actType, setActType] = useState<string>("attraction");
   const [startTime, setStartTime] = useState("09:00");
   const [endTime, setEndTime] = useState("11:00");
@@ -87,9 +89,10 @@ export function AddActivityForm({ dayId, cityName, onAdd, onClose, initialActivi
   const search = (kw: string) => {
     if (kw.length < 2) { setSuggestions([]); setShowDropdown(false); return; }
     setLoading(true);
+    setSearchError("");
     fetch(`/api/poi/search?${new URLSearchParams({ keyword: kw, city: cityName, limit: "8" })}`)
       .then((r) => r.json())
-      .then((d) => {
+      .then(async (d) => {
         if (d.success && d.data?.pois?.length) {
           setSuggestions(d.data.pois.map((p: any) => ({
             id: p.amapId,
@@ -100,10 +103,24 @@ export function AddActivityForm({ dayId, cityName, onAdd, onClose, initialActivi
             type: p.type || "attraction",
           })));
           setShowDropdown(true);
-        } else { setSuggestions([]); setShowDropdown(false); }
-        setLoading(false);
+        } else {
+          const fallbackPois = await searchPoiWithAmapSdk({ keyword: kw, city: cityName, limit: 8 });
+          setSuggestions(fallbackPois);
+          setShowDropdown(fallbackPois.length > 0);
+        }
       })
-      .catch(() => setLoading(false));
+      .catch(async () => {
+        try {
+          const fallbackPois = await searchPoiWithAmapSdk({ keyword: kw, city: cityName, limit: 8 });
+          setSuggestions(fallbackPois);
+          setShowDropdown(fallbackPois.length > 0);
+        } catch (err) {
+          setSuggestions([]);
+          setShowDropdown(false);
+          setSearchError((err as Error).message || "地点搜索失败，请稍后再试。");
+        }
+      })
+      .finally(() => setLoading(false));
   };
 
   const onInput = (v: string) => {
@@ -170,6 +187,7 @@ export function AddActivityForm({ dayId, cityName, onAdd, onClose, initialActivi
                 </div>
               )}
             </div>
+            {searchError && <p className="mt-2 text-xs text-red-500">{searchError}</p>}
             <div className="mt-2 flex flex-wrap gap-2">
               {QUICK_SEARCHES.map((item) => (
                 <button

@@ -6,6 +6,9 @@ import { Icon } from "@/components/shared/Icon";
 import { LoadingSpinner } from "@/components/shared/LoadingSpinner";
 import { cn } from "@/lib/utils/cn";
 import { createId } from "@/lib/utils/createId";
+import { searchPoiWithAmapSdk } from "@/lib/poi/clientSearch";
+
+const EXPLORE_RESULT_LIMIT = 50;
 
 interface POI {
   id: string;
@@ -31,11 +34,11 @@ const POPULAR_CITIES = [
   { name: "三亚", lng: 109.508, lat: 18.253 },
 ];
 
-const CATEGORY_MAP: Record<string, { label: string; keyword: string }> = {
-  all: { label: "推荐", keyword: "景点" },
-  scenic: { label: "景点", keyword: "景点" },
-  food: { label: "美食", keyword: "美食" },
-  hotel: { label: "住宿", keyword: "酒店" },
+const CATEGORY_MAP: Record<string, { label: string; keyword: string; types: string }> = {
+  all: { label: "推荐", keyword: "景点", types: "110000|050000|100000" },
+  scenic: { label: "景点", keyword: "景点", types: "110000" },
+  food: { label: "美食", keyword: "美食", types: "050000" },
+  hotel: { label: "住宿", keyword: "酒店", types: "100000" },
 };
 
 const CATEGORY_ICONS: Record<string, string> = {
@@ -160,14 +163,33 @@ export default function ExplorePage() {
 
   const doSearch = useCallback((cityName: string, catKey: string) => {
     setLoading(true);
-    const keyword = CATEGORY_MAP[catKey]?.keyword || "景点";
-    const params = new URLSearchParams({ keyword, city: cityName, limit: "20" });
+    setSearchError("");
+    const config = CATEGORY_MAP[catKey] ?? CATEGORY_MAP.all!;
+    const params = new URLSearchParams({
+      keyword: config.keyword,
+      city: cityName,
+      types: config.types,
+      limit: String(EXPLORE_RESULT_LIMIT),
+    });
+
+    const applyList = (list: POI[]) => {
+      setPois(list);
+      setTimeout(() => { try { renderMarkers(list, null); } catch (e) {} }, 100);
+    };
+
+    const fallbackSearch = () =>
+      searchPoiWithAmapSdk({
+        keyword: config.keyword,
+        city: cityName,
+        types: config.types,
+        limit: EXPLORE_RESULT_LIMIT,
+      });
 
     fetch(`/api/poi/search?${params}`)
       .then((r) => r.json())
-      .then((data) => {
+      .then(async (data) => {
         if (data.success && data.data?.pois?.length > 0) {
-          const list = data.data.pois.map((p: any) => ({
+          const list = data.data.pois.slice(0, EXPLORE_RESULT_LIMIT).map((p: any) => ({
             id: p.amapId || createId("poi"),
             name: p.name,
             address: p.address || "",
@@ -175,14 +197,31 @@ export default function ExplorePage() {
             lat: p.coordinate?.lat || 0,
             type: normalizePoiType(p.type),
           }));
-          setPois(list);
-          setTimeout(() => { try { renderMarkers(list, null); } catch (e) {} }, 100);
-        } else {
-          setPois([]);
+          applyList(list);
+          return;
         }
-        setLoading(false);
+
+        const fallbackList = (await fallbackSearch()).map((poi) => ({
+          ...poi,
+          id: poi.id || createId("poi"),
+          type: normalizePoiType(poi.type),
+        }));
+        applyList(fallbackList);
       })
-      .catch(() => { setLoading(false); });
+      .catch(async () => {
+        try {
+          const fallbackList = (await fallbackSearch()).map((poi) => ({
+            ...poi,
+            id: poi.id || createId("poi"),
+            type: normalizePoiType(poi.type),
+          }));
+          applyList(fallbackList);
+        } catch (err) {
+          setPois([]);
+          setSearchError(`地点搜索失败：${(err as Error).message}`);
+        }
+      })
+      .finally(() => setLoading(false));
   }, [renderMarkers]);
 
   useEffect(() => {
