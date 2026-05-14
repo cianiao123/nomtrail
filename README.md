@@ -45,3 +45,9 @@ NEXTAUTH_URL
 ```
 
 Before deploying, make sure the Supabase tables used by the API routes exist in the target project.
+
+## Tencent Cloud Lighthouse Deployment
+
+For a Tencent Cloud Lighthouse server, use Ubuntu 22.04 LTS with Node.js 22, PM2, and Nginx.
+
+See [docs/tencent-cloud-lighthouse.md](docs/tencent-cloud-lighthouse.md).
