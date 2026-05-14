@@ -6,6 +6,7 @@ import { NextRequest } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { travelAgentGraph } from "@/lib/agent/graph";
 import { formatAgentNodeName } from "@/lib/agent/agents/registry";
+import { SERVER_ANONYMOUS_USER_ID } from "@/lib/auth/guestUser";
 import type { TravelAgentState } from "@/lib/agent/state";
 import type { AgentRunSSEEvent, AgentConfirmRequest, ConfirmedPlace } from "@/types/agent";
 
@@ -44,7 +45,7 @@ export async function POST(req: NextRequest) {
 
   const savedState = session.state_data as TravelAgentState;
   if (tripId) savedState.tripId = tripId;
-  savedState.userId = userId || savedState.userId || "local-user";
+  savedState.userId = userId || savedState.userId || SERVER_ANONYMOUS_USER_ID;
 
   if (decision.confirmedPlaces?.length) {
     savedState.confirmedPlaces = decision.confirmedPlaces.map((p: ConfirmedPlace) => ({
@@ -98,7 +99,7 @@ export async function POST(req: NextRequest) {
         }
         const payload = {
           thread_id: result.threadId,
-          user_id: result.userId || savedState.userId || "local-user", trip_id: result.tripId || null,
+          user_id: result.userId || savedState.userId || SERVER_ANONYMOUS_USER_ID, trip_id: result.tripId || null,
           status: "completed", state_data: result, updated_at: new Date().toISOString(),
         };
         const { data: existingSession, error: findError } = await supabase

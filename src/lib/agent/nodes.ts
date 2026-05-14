@@ -55,6 +55,9 @@ import {
   isRequestTerminationError,
 } from "./runtime";
 import { formatAgentNodeName } from "./agents/registry";
+
+const SERVER_ANONYMOUS_USER_ID = "anonymous-server-user";
+
 import type {
   ParsedPlace,
   ItineraryVersion,
@@ -815,7 +818,7 @@ export async function loadContextNode(
 
       const trip: Trip = {
         id: String(tripRow.id),
-        userId: String(tripRow.user_id ?? "local-user"),
+        userId: String(tripRow.user_id ?? SERVER_ANONYMOUS_USER_ID),
         title: String(tripRow.title ?? ""),
         destination: String(tripRow.destination ?? ""),
         destinationCoord: {
@@ -2680,7 +2683,7 @@ export async function createTripNode(
   try {
     const supabase = getSupabase();
     const tripId = crypto.randomUUID();
-    const userId = state.userId || "local-user";
+    const userId = state.userId || SERVER_ANONYMOUS_USER_ID;
 
     // Step 1: Create trip in Supabase
     const { error: tripError } = await supabase.from("trips").insert({

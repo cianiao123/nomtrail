@@ -1,5 +1,7 @@
 import type { TravelAgentState } from "./state";
 
+const SERVER_ANONYMOUS_USER_ID = "anonymous-server-user";
+
 interface CreateInitialAgentStateInput {
   threadId: string;
   message: string;
@@ -25,7 +27,7 @@ export function createInitialAgentState({
 
   return {
     threadId,
-    userId: userId || prevState?.userId || "local-user",
+    userId: userId || prevState?.userId || SERVER_ANONYMOUS_USER_ID,
     requestStartedAt,
     requestDeadlineAt,
     tripId: nextTripId,

@@ -7,6 +7,7 @@ import { useTripStore } from "@/stores/tripStore";
 import { Icon } from "@/components/shared/Icon";
 import { cn } from "@/lib/utils/cn";
 import { createClient } from "@/lib/supabase/client";
+import { resolveClientUserId } from "@/lib/auth/guestUser";
 
 const TABS = ["我的行程", "收藏目的地", "偏好设置", "历史记录"];
 
@@ -18,6 +19,7 @@ export default function ProfilePage() {
   const logout = useUserStore((s) => s.logout);
   const updatePreferences = useUserStore((s) => s.updatePreferences);
   const userPreferences = useUserStore((s) => s.userPreferences);
+  const currentUserId = resolveClientUserId(userProfile?.id);
   const trips = useTripStore((s) => s.trips);
   const tripIds = useTripStore((s) => s.tripIds);
   const saveTrip = useTripStore((s) => s.saveTrip);
@@ -25,8 +27,7 @@ export default function ProfilePage() {
   const [deletingTripIds, setDeletingTripIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    if (!userProfile?.id) return;
-    fetch(`/api/trips?userId=${encodeURIComponent(userProfile.id)}`)
+    fetch(`/api/trips?userId=${encodeURIComponent(currentUserId)}`)
       .then((res) => res.json())
       .then((data) => {
         if (data.success && Array.isArray(data.data)) {
@@ -34,11 +35,11 @@ export default function ProfilePage() {
         }
       })
       .catch(() => {});
-  }, [saveTrip, userProfile?.id]);
+  }, [currentUserId, saveTrip]);
 
   const myTrips = tripIds
     .map((id) => trips[id]!)
-    .filter((trip) => trip && (!userProfile?.id || trip.userId === userProfile.id));
+    .filter((trip) => trip && trip.userId === currentUserId);
 
   async function handleLogout() {
     await createClient().auth.signOut();
@@ -66,24 +67,6 @@ export default function ProfilePage() {
     }
   }
 
-  if (!isAuthenticated) {
-    return (
-      <div className="mx-auto flex min-h-[calc(100vh-76px)] max-w-[980px] items-center justify-center px-5 py-12">
-        <div className="rounded-[32px] border border-outline-variant/60 bg-[rgba(255,255,255,0.82)] px-8 py-14 text-center shadow-[0_22px_60px_rgba(8,35,69,0.08)]">
-          <Icon name="account_circle" className="mx-auto mb-5 text-[72px] text-primary/35" />
-          <h1 className="font-display text-[2.4rem] text-primary">登录后查看你的行程</h1>
-          <p className="mt-3 text-sm text-on-surface-variant">你的旅行档案、心愿地点和历史行程会保存在账户里。</p>
-          <button
-            onClick={() => router.push("/login?next=/profile")}
-            className="mt-7 rounded-full bg-primary px-7 py-3 text-sm font-medium text-white transition-all hover:shadow-lg"
-          >
-            去登录
-          </button>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="mx-auto max-w-[1240px] px-4 pb-16 pt-8 md:px-6">
       <div className="mb-8 overflow-hidden rounded-[32px] border border-outline-variant/60 bg-[linear-gradient(135deg,rgba(255,255,255,0.9),rgba(237,244,251,0.94))] p-6 shadow-[0_22px_60px_rgba(8,35,69,0.07)] md:p-8">
@@ -94,16 +77,27 @@ export default function ProfilePage() {
           <div className="flex min-w-0 flex-1 items-end justify-between gap-4">
             <div className="min-w-0">
             <p className="mb-2 text-[11px] tracking-[0.2em] text-on-surface-variant">旅行档案</p>
-            <h1 className="font-display text-[2.2rem] leading-tight text-primary">{userProfile?.name || "旅行家"}</h1>
-            <p className="text-sm text-on-surface-variant">{userProfile?.email || "你的灵感、行程与偏好，都在这里被安静整理。"}</p>
+            <h1 className="font-display text-[2.2rem] leading-tight text-primary">{userProfile?.name || "匿名旅行家"}</h1>
+            <p className="text-sm text-on-surface-variant">
+              {userProfile?.email || "当前浏览器中的行程会独立保存，不会和其他访客混在一起。"}
+            </p>
             </div>
             <div className="flex flex-shrink-0 items-center gap-5 text-right">
-              <button
-                onClick={handleLogout}
-                className="rounded-full border border-outline-variant/70 px-4 py-2 text-sm font-medium text-on-surface-variant transition-colors hover:bg-white hover:text-primary"
-              >
-                退出
-              </button>
+              {isAuthenticated ? (
+                <button
+                  onClick={handleLogout}
+                  className="rounded-full border border-outline-variant/70 px-4 py-2 text-sm font-medium text-on-surface-variant transition-colors hover:bg-white hover:text-primary"
+                >
+                  退出
+                </button>
+              ) : (
+                <button
+                  onClick={() => router.push("/login?next=/profile")}
+                  className="rounded-full border border-outline-variant/70 px-4 py-2 text-sm font-medium text-on-surface-variant transition-colors hover:bg-white hover:text-primary"
+                >
+                  登录同步
+                </button>
+              )}
               <div>
               <p className="text-[12px] uppercase tracking-[0.18em] text-on-surface-variant">已保存行程</p>
               <p className="mt-1 font-display text-[1.9rem] leading-none text-primary">{myTrips.length}</p>

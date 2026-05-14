@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Icon } from "@/components/shared/Icon";
 import { cn } from "@/lib/utils/cn";
+import { enableGuestMode } from "@/lib/auth/guestUser";
 
 type AuthMode = "login" | "signup";
 
@@ -59,6 +60,11 @@ function LoginPageContent() {
     } finally {
       setIsSubmitting(false);
     }
+  }
+
+  function handleGuestAccess() {
+    enableGuestMode();
+    router.replace(redirectTo);
   }
 
   return (
@@ -186,6 +192,30 @@ function LoginPageContent() {
               {isSubmitting && <Icon name="progress_activity" className="animate-spin text-[18px]" />}
               {mode === "login" ? "登录" : "注册"}
             </button>
+
+            <div className="pt-2">
+              <button
+                type="button"
+                onClick={handleGuestAccess}
+                className="group flex w-full items-center justify-between gap-4 rounded-[18px] border border-white/36 bg-white/14 px-4 py-4 text-left text-white shadow-[0_16px_36px_rgba(1,12,30,0.14)] backdrop-blur-md transition-all hover:-translate-y-0.5 hover:border-white/64 hover:bg-white/20"
+              >
+                <span className="flex min-w-0 items-center gap-3">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/18 text-white">
+                    <Icon name="travel_explore" className="text-[22px]" />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-sm font-semibold tracking-[0.1em]">游客模式</span>
+                    <span className="mt-1 block text-xs leading-5 text-white/66">
+                      匿名访客访问，当前浏览器内独立保存行程
+                    </span>
+                  </span>
+                </span>
+                <Icon
+                  name="arrow_forward"
+                  className="shrink-0 text-[20px] text-white/72 transition-transform group-hover:translate-x-1 group-hover:text-white"
+                />
+              </button>
+            </div>
           </form>
         </div>
         </div>

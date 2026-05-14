@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { TopNavBar } from "./TopNavBar";
 import { BottomNavBar } from "./BottomNavBar";
 import { AgentPanel } from "@/components/agent/AgentPanel";
+import { AuthClickGuard } from "@/components/auth/AuthClickGuard";
 import { Icon } from "@/components/shared/Icon";
 import { cn } from "@/lib/utils/cn";
 import { useAgentStore } from "@/stores/agentStore";
@@ -26,7 +27,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   };
 
   return (
-    <>
+    <AuthClickGuard>
       {!isTripPage && !isLoginPage && <TopNavBar />}
       <div className="relative mx-auto flex w-full max-w-[1920px] flex-1">
         <main
@@ -110,6 +111,6 @@ export function AppShell({ children }: { children: ReactNode }) {
       )}
 
       {!isLoginPage && <BottomNavBar />}
-    </>
+    </AuthClickGuard>
   );
 }

@@ -11,6 +11,7 @@ import { Activity, Day, PreferenceTag, Trip } from "@/types/trip";
 import { PREFERENCE_TAGS, BUDGET_OPTIONS } from "@/lib/constants";
 import { useTripStore } from "@/stores/tripStore";
 import { useUserStore } from "@/stores/userStore";
+import { resolveClientUserId } from "@/lib/auth/guestUser";
 
 type PlannerMode = "ai" | "manual";
 type CreatePhase =
@@ -67,6 +68,7 @@ function CreatePageContent() {
   const searchParams = useSearchParams();
   const saveTrip = useTripStore((s) => s.saveTrip);
   const userProfile = useUserStore((s) => s.userProfile);
+  const currentUserId = resolveClientUserId(userProfile?.id);
 
   const mode: PlannerMode = searchParams.get("mode") === "manual" ? "manual" : "ai";
   const initialWishlist = searchParams.get("wishlist") || "";
@@ -206,7 +208,7 @@ function CreatePageContent() {
 
     return {
       id,
-      userId: userProfile?.id || "local-user",
+      userId: currentUserId,
       title: destination ? `${destination}之旅` : "未命名行程",
       destination,
       destinationCoord: { lat: 0, lng: 0 },
@@ -299,7 +301,7 @@ function CreatePageContent() {
       const runRes = await fetch("/api/agent/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ threadId, message, userId: userProfile?.id || "local-user" }),
+        body: JSON.stringify({ threadId, message, userId: currentUserId }),
       });
 
       const firstComplete = await readAgentStream(runRes);
@@ -323,7 +325,7 @@ function CreatePageContent() {
         const confirmRes = await fetch("/api/agent/confirm", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ threadId, decision: {} }),
+          body: JSON.stringify({ threadId, userId: currentUserId, decision: {} }),
         });
 
         const secondComplete = await readAgentStream(confirmRes);

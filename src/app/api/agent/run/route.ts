@@ -9,6 +9,7 @@ import { createClient } from "@supabase/supabase-js";
 import { travelAgentGraph } from "@/lib/agent/graph";
 import { createInitialAgentState } from "@/lib/agent/sessionContext";
 import { formatAgentNodeName } from "@/lib/agent/agents/registry";
+import { SERVER_ANONYMOUS_USER_ID } from "@/lib/auth/guestUser";
 import type { TravelAgentState } from "@/lib/agent/state";
 import type { AgentRunRequest, AgentRunSSEEvent } from "@/types/agent";
 
@@ -41,7 +42,7 @@ async function saveSession(state: TravelAgentState, status: string) {
     const supabase = getSupabase();
     const payload = {
       thread_id: state.threadId,
-      user_id: state.userId || "local-user",
+      user_id: state.userId || SERVER_ANONYMOUS_USER_ID,
       trip_id: state.tripId || null,
       status,
       state_data: JSON.parse(JSON.stringify(state)), // ensure serializable

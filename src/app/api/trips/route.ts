@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabase } from "@/lib/supabase/server";
+import { SERVER_ANONYMOUS_USER_ID } from "@/lib/auth/guestUser";
 
 type TripRow = Record<string, unknown> & { id: string };
 type DayRow = Record<string, unknown> & { id: string; trip_id: string };
@@ -18,7 +19,7 @@ type PostDay = Record<string, unknown> & {
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
-    const userId = searchParams.get("userId") || "local-user";
+    const userId = searchParams.get("userId") || SERVER_ANONYMOUS_USER_ID;
     const supabase = await createServerSupabase();
 
     // Fetch trips
@@ -130,7 +131,7 @@ export async function POST(req: NextRequest) {
 
     const { error } = await supabase.from("trips").insert({
       id,
-      user_id: body.userId || "local-user",
+      user_id: body.userId || SERVER_ANONYMOUS_USER_ID,
       title: body.title || "未命名行程",
       destination: body.destination || "",
       destination_lat: body.destinationCoord?.lat ?? null,

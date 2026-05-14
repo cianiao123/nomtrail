@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils/cn";
 import { createId } from "@/lib/utils/createId";
 import { useTripStore } from "@/stores/tripStore";
 import { useUserStore } from "@/stores/userStore";
+import { resolveClientUserId } from "@/lib/auth/guestUser";
 
 interface Props {
   tripId?: string;
@@ -148,6 +149,7 @@ export function AgentPanel({ tripId, className, alwaysExpanded }: Props) {
   const saveTrip = useTripStore((s) => s.saveTrip);
   const setCurrentTrip = useTripStore((s) => s.setCurrentTrip);
   const userProfile = useUserStore((s) => s.userProfile);
+  const currentUserId = resolveClientUserId(userProfile?.id || currentTrip?.userId);
   const [formAnswers, setFormAnswers] = useState<Record<string, string>>({});
   const appliedDraftRef = useRef<string>("");
 
@@ -269,7 +271,7 @@ export function AgentPanel({ tripId, className, alwaysExpanded }: Props) {
           threadId,
           message: msg,
           tripId: tripId,
-          userId: userProfile?.id || currentTrip?.userId || "local-user",
+          userId: currentUserId,
         }),
       });
 
@@ -304,7 +306,7 @@ export function AgentPanel({ tripId, className, alwaysExpanded }: Props) {
         body: JSON.stringify({
           threadId,
           tripId,
-          userId: userProfile?.id || currentTrip?.userId || "local-user",
+          userId: currentUserId,
           decision: {
             confirmedPlaces: confirmed,
             removedPlaceIds: removedIds,
