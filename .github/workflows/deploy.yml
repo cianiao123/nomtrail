@@ -22,10 +22,19 @@ jobs:
           TENCENT_SSH_KEY: ${{ secrets.TENCENT_SSH_KEY }}
         run: |
           set -euo pipefail
+          DEPLOY_HOST="$(printf '%s' "$TENCENT_HOST" | tr -d '[:space:]')"
+          DEPLOY_HOST="${DEPLOY_HOST#http://}"
+          DEPLOY_HOST="${DEPLOY_HOST#https://}"
+          DEPLOY_HOST="${DEPLOY_HOST#*@}"
+          DEPLOY_HOST="${DEPLOY_HOST%%/*}"
+          if [ -z "$DEPLOY_HOST" ]; then
+            echo "TENCENT_HOST is empty after normalization"
+            exit 1
+          fi
           mkdir -p ~/.ssh
           printf '%s\n' "$TENCENT_SSH_KEY" > ~/.ssh/tencent_deploy_key
           chmod 600 ~/.ssh/tencent_deploy_key
-          ssh-keyscan -H "$TENCENT_HOST" >> ~/.ssh/known_hosts
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
 
       - name: Deploy on server
         env:
@@ -33,8 +42,22 @@ jobs:
           TENCENT_USER: ${{ secrets.TENCENT_USER }}
         run: |
           set -euo pipefail
-          DEPLOY_USER="${TENCENT_USER:-ubuntu}"
-          ssh -i ~/.ssh/tencent_deploy_key "${DEPLOY_USER}@${TENCENT_HOST}" <<'EOF'
+          DEPLOY_HOST="$(printf '%s' "$TENCENT_HOST" | tr -d '[:space:]')"
+          DEPLOY_HOST="${DEPLOY_HOST#http://}"
+          DEPLOY_HOST="${DEPLOY_HOST#https://}"
+          DEPLOY_HOST="${DEPLOY_HOST#*@}"
+          DEPLOY_HOST="${DEPLOY_HOST%%/*}"
+          DEPLOY_USER="$(printf '%s' "${TENCENT_USER:-ubuntu}" | tr -d '[:space:]')"
+          DEPLOY_USER="${DEPLOY_USER%@*}"
+          if [ -z "$DEPLOY_HOST" ]; then
+            echo "TENCENT_HOST is empty after normalization"
+            exit 1
+          fi
+          if [ -z "$DEPLOY_USER" ]; then
+            DEPLOY_USER="ubuntu"
+          fi
+          echo "Deploying to ${DEPLOY_USER}@${DEPLOY_HOST}"
+          ssh -i ~/.ssh/tencent_deploy_key "${DEPLOY_USER}@${DEPLOY_HOST}" <<'EOF'
             set -euo pipefail
             cd /var/www/travel-planner
             git pull --ff-only origin main
