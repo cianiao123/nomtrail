@@ -39,6 +39,15 @@ test("trip duration advice does not open trip planning form", () => {
   assert.ok(promptsSource.includes("适合玩几天/建议玩几天/几天合适/要留多久"), "LLM classifier prompt should preserve the duration-advice rule");
 });
 
+test("accommodation advice is grouped into destination recommendations", () => {
+  const nodesSource = fs.readFileSync(path.resolve("src/lib/agent/nodes.ts"), "utf8");
+  const promptsSource = fs.readFileSync(promptsPath, "utf8");
+
+  assert.ok(nodesSource.includes("isAccommodationAdviceQuery"), "classifier should detect lodging area questions before trip creation patterns");
+  assert.ok(promptsSource.includes("住宿区域/酒店位置建议"), "recommendation intent should include lodging advice in the product taxonomy");
+  assert.ok(promptsSource.includes("大理建议住在哪里"), "LLM prompt should include lodging advice as a recommendation example");
+});
+
 test("origin follow-up after destination recommendation keeps recommendation context", () => {
   const nodesSource = fs.readFileSync(path.resolve("src/lib/agent/nodes.ts"), "utf8");
   const promptsSource = fs.readFileSync(promptsPath, "utf8");

@@ -1409,12 +1409,12 @@ export async function classifyIntentNode(
   }
 
   const msg = state.currentMessage ?? "";
-  if (isTripDurationAdviceQuery(msg)) {
+  if (isTripDurationAdviceQuery(msg) || isAccommodationAdviceQuery(msg)) {
     return {
       intent: "recommendDestinations",
       intentConfidence: 0.95,
       actionLog: [
-        logAction(state, "classify_intent", "keyword: duration_advice", Date.now() - t0),
+        logAction(state, "classify_intent", "keyword: recommendation_advice", Date.now() - t0),
       ],
     };
   }
@@ -1478,6 +1478,11 @@ function isTripDurationAdviceQuery(msg: string) {
     || /(?:几天|多少天|几晚|多久).{0,12}(?:合适|比较好|够|够不够)/.test(text);
 }
 
+function isAccommodationAdviceQuery(msg: string) {
+  const text = msg.trim();
+  return /(?:住在哪里|住哪儿|住哪里|住宿|酒店|民宿|客栈|住.*方便|住.*合适|建议住|推荐住|住宿推荐|酒店推荐|住.*区域|哪个区域住)/.test(text);
+}
+
 function detectQuickIntent(
   msg: string,
   state: TravelAgentState
@@ -1512,7 +1517,7 @@ function detectQuickIntent(
     && !!(reqs.dayCount || (reqs.startDate && reqs.endDate))
     && !!reqs.preferences?.length;
 
-  if (placeGuidePatterns.test(text)) return "recommendDestinations";
+  if (placeGuidePatterns.test(text) || isAccommodationAdviceQuery(text)) return "recommendDestinations";
   if (isRecommendationFollowUp(text, state)) return "recommendDestinations";
 
   if (!hasTrip && !hasParsedReqs && recommendPatterns.test(text) && !explicitTripInfoPatterns.test(text)) {
