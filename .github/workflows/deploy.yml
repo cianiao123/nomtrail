@@ -59,6 +59,10 @@ jobs:
           echo "Deploying to ${DEPLOY_USER}@${DEPLOY_HOST}"
           ssh -i ~/.ssh/tencent_deploy_key "${DEPLOY_USER}@${DEPLOY_HOST}" <<'EOF'
             set -euo pipefail
+            mkdir -p ~/.ssh
+            chmod 700 ~/.ssh
+            ssh-keyscan -H github.com >> ~/.ssh/known_hosts
+            chmod 600 ~/.ssh/known_hosts
             cd /var/www/travel-planner
             git pull --ff-only origin main
             npm ci
