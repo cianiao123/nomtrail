@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Icon } from "@/components/shared/Icon";
 import { cn } from "@/lib/utils/cn";
 
 type PhaseKey =
   | "idle"
   | "parse"
+  | "recommend_destinations"
   | "confirm"
+  | "plan_transport"
   | "research_inspiration"
   | "extract_places"
   | "budget_check"
@@ -23,49 +25,36 @@ interface Props {
   className?: string;
 }
 
-const STAGE_LABELS = [
-  { key: "parse", label: "分析需求" },
-  { key: "research_inspiration", label: "搜索攻略" },
-  { key: "extract_places", label: "提炼地点" },
-  { key: "budget_check", label: "预算校验" },
-  { key: "generate_itinerary", label: "生成行程" },
-  { key: "save_version", label: "保存结果" },
-] as const;
+const STAGE_LABELS: { key: PhaseKey; label: string; icon: string }[] = [
+  { key: "parse", label: "分析需求", icon: "manage_search" },
+  { key: "plan_transport", label: "规划交通", icon: "sync_alt" },
+  { key: "research_inspiration", label: "搜索灵感", icon: "travel_explore" },
+  { key: "extract_places", label: "提炼地点", icon: "location_on" },
+  { key: "budget_check", label: "校验预算", icon: "payments" },
+  { key: "critique_itinerary", label: "检查行程", icon: "fact_check" },
+  { key: "generate_itinerary", label: "生成行程", icon: "route" },
+  { key: "save_version", label: "保存结果", icon: "bookmark_added" },
+];
 
-function getDisplayedPhase(phase: PhaseKey, elapsedMs: number) {
-  if (phase === "complete") {
-    return { phase: "complete" as const, progress: 100 };
-  }
+const PHASE_META: Record<PhaseKey, { label: string; icon: string }> = {
+  idle: { label: "准备开始规划", icon: "auto_awesome" },
+  parse: { label: "正在理解旅行需求", icon: "manage_search" },
+  recommend_destinations: { label: "正在整理推荐", icon: "travel_explore" },
+  confirm: { label: "正在等待确认信息", icon: "rule" },
+  plan_transport: { label: "正在规划往返交通", icon: "sync_alt" },
+  research_inspiration: { label: "正在搜索旅行灵感", icon: "travel_explore" },
+  extract_places: { label: "正在提炼候选地点", icon: "location_on" },
+  budget_check: { label: "正在校验预算", icon: "payments" },
+  critique_itinerary: { label: "正在检查行程可行性", icon: "fact_check" },
+  generate_itinerary: { label: "正在生成个性化行程", icon: "route" },
+  save_version: { label: "正在保存行程结果", icon: "bookmark_added" },
+  complete: { label: "规划已完成", icon: "check_circle" },
+};
 
-  if (phase === "confirm") {
-    const seconds = elapsedMs / 1000;
-    if (seconds < 10) return { phase: "research_inspiration" as const, progress: 28 };
-    if (seconds < 22) return { phase: "extract_places" as const, progress: 52 };
-    if (seconds < 34) return { phase: "budget_check" as const, progress: 68 };
-    if (seconds < 44) return { phase: "generate_itinerary" as const, progress: 84 };
-    return { phase: "save_version" as const, progress: 94 };
-  }
-
-  switch (phase) {
-    case "parse":
-      return { phase, progress: 12 };
-    case "research_inspiration":
-      return elapsedMs > 12000
-        ? { phase: "extract_places" as const, progress: 48 }
-        : { phase, progress: 30 };
-    case "extract_places":
-      return { phase, progress: 56 };
-    case "budget_check":
-      return { phase, progress: 68 };
-    case "critique_itinerary":
-      return { phase, progress: 76 };
-    case "generate_itinerary":
-      return { phase, progress: 90 };
-    case "save_version":
-      return { phase, progress: 96 };
-    default:
-      return { phase: "parse" as const, progress: 10 };
-  }
+function stageIcon(stage: { key: PhaseKey; icon: string }, isDone: boolean, isActive: boolean) {
+  if (isDone) return "check";
+  if (isActive) return PHASE_META[stage.key]?.icon ?? stage.icon;
+  return stage.icon;
 }
 
 export function ReasoningProgress({
@@ -75,86 +64,89 @@ export function ReasoningProgress({
   insightLines = [],
   className,
 }: Props) {
-  const [elapsedMs, setElapsedMs] = useState(0);
-
-  useEffect(() => {
-    if (!active) return;
-
-    const startedAt = Date.now();
-    const timer = window.setInterval(() => {
-      setElapsedMs(Date.now() - startedAt);
-    }, 1000);
-
-    return () => window.clearInterval(timer);
-  }, [active, phase]);
-
-  const model = useMemo(
-    () => getDisplayedPhase(phase, elapsedMs),
-    [phase, elapsedMs]
-  );
+  const currentMeta = PHASE_META[phase] ?? PHASE_META.parse;
+  const activeIndex = STAGE_LABELS.findIndex((item) => item.key === phase);
+  const readableStatus = status || currentMeta.label;
+  const isRecommendation = phase === "recommend_destinations";
 
   return (
     <div
       className={cn(
-        "rounded-xl border border-outline-variant bg-surface-container-low p-4 space-y-3",
+        "overflow-hidden rounded-[22px] border border-black/10 bg-white px-4 py-3 shadow-[0_18px_44px_rgba(16,24,32,0.08)]",
         className
       )}
     >
-      <div className="flex items-start justify-between gap-4">
-        <div className="min-w-0">
-          <p className="text-sm font-medium text-on-surface">执行进度</p>
-          <p className="text-xs text-on-surface-variant mt-1">{status}</p>
+      <div className="flex items-center gap-3">
+        <div className="relative flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-[radial-gradient(circle_at_35%_30%,#ffffff,#eef6ff)] shadow-[inset_0_0_0_1px_rgba(23,33,43,0.08),0_10px_26px_rgba(30,96,180,0.12)]">
+          <span className="absolute inset-1.5 rounded-full border border-blue-100" />
+          <span className="absolute -right-0.5 top-1.5 h-3 w-3 rounded-full border-2 border-white bg-blue-500" />
+          <span
+            className={cn(
+              "flex h-9 w-9 items-center justify-center rounded-[14px] bg-white text-blue-600 shadow-sm",
+              active && "animate-pulse"
+            )}
+          >
+            <Icon name={currentMeta.icon} className="text-[19px]" />
+          </span>
         </div>
-        <span className="shrink-0 text-xs font-medium text-primary">
-          {model.progress}%
-        </span>
-      </div>
 
-      <div className="h-2 rounded-full bg-surface-container overflow-hidden">
-        <div
-          className="h-full rounded-full bg-primary transition-[width] duration-500"
-          style={{ width: `${model.progress}%` }}
-        />
-      </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-blue-50 px-2.5 py-1 text-[10px] font-semibold tracking-[0.12em] text-blue-700">
+              <span className="h-1.5 w-1.5 rounded-full border border-blue-500" />
+              {isRecommendation ? "AI RECOMMEND" : "AI PLANNING"}
+            </span>
+            <Icon name="play_arrow" className="shrink-0 text-[14px] text-cyan-600" filled />
+            <p className="truncate text-sm font-semibold text-on-surface">
+              {readableStatus}
+              {active ? "..." : ""}
+            </p>
+          </div>
 
-      <div className="grid grid-cols-6 gap-2">
-        {STAGE_LABELS.map((stage, index) => {
-          const activeIndex = STAGE_LABELS.findIndex(
-            (item) => item.key === model.phase
-          );
-          const isDone = model.phase === "complete" || activeIndex > index;
-          const isActive = model.phase === stage.key;
+          {!isRecommendation && (
+            <div className="mt-2 flex items-center gap-2 overflow-hidden">
+              {STAGE_LABELS.map((stage, index) => {
+              const isDone = phase === "complete" || (activeIndex >= 0 && activeIndex > index);
+              const isActive = phase === stage.key;
+              const iconName = stageIcon(stage, isDone, isActive);
 
-          return (
-            <div key={stage.key} className="space-y-1">
-              <div
-                className={cn(
-                  "h-1.5 rounded-full transition-colors",
-                  isDone || isActive ? "bg-primary" : "bg-outline-variant"
-                )}
-              />
-              <p
-                className={cn(
-                  "text-[11px] leading-tight",
-                  isDone || isActive ? "text-on-surface" : "text-on-surface-variant"
-                )}
-              >
-                {stage.label}
-              </p>
+              return (
+                <span
+                  key={stage.key}
+                  className={cn(
+                    "relative flex h-5 w-5 shrink-0 items-center justify-center overflow-hidden rounded-full border transition-all duration-300",
+                    isActive
+                      ? "scale-110 border-blue-200 bg-blue-50 text-blue-600 shadow-[0_0_0_4px_rgba(37,99,235,0.08)] motion-safe:animate-pulse"
+                      : isDone
+                        ? "border-emerald-100 bg-emerald-50 text-emerald-600"
+                        : "border-transparent bg-transparent text-on-surface-variant/30"
+                  )}
+                  title={stage.label}
+                >
+                  {isActive && (
+                    <span className="absolute inset-y-0 -left-full w-full bg-gradient-to-r from-transparent via-white/80 to-transparent motion-safe:animate-[progress-scan_1.25s_ease-in-out_infinite]" />
+                  )}
+                  <Icon
+                    name={iconName}
+                    className={cn("relative text-[12px]", isActive && "motion-safe:animate-[progress-pop_1.25s_ease-in-out_infinite]")}
+                  />
+                </span>
+              );
+              })}
             </div>
-          );
-        })}
+          )}
+        </div>
       </div>
 
       {insightLines.length > 0 && (
-        <div className="rounded-lg bg-surface px-3 py-2 space-y-1">
-          <p className="text-[11px] font-medium text-on-surface-variant">
-            思考摘要
-          </p>
-          {insightLines.slice(0, 4).map((line, index) => (
-            <p key={`${line}-${index}`} className="text-xs text-on-surface-variant">
+        <div className="mt-3 flex flex-wrap gap-1.5 border-t border-outline-variant/45 pt-2">
+          {insightLines.slice(0, 3).map((line, index) => (
+            <span
+              key={`${line}-${index}`}
+              className="rounded-full bg-surface-container-low px-2 py-1 text-[11px] text-on-surface-variant"
+            >
               {line}
-            </p>
+            </span>
           ))}
         </div>
       )}

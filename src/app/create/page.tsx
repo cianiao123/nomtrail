@@ -18,6 +18,7 @@ type CreatePhase =
   | "idle"
   | "parse"
   | "confirm"
+  | "plan_transport"
   | "research_inspiration"
   | "extract_places"
   | "critique_itinerary"
@@ -26,6 +27,8 @@ type CreatePhase =
 
 const STEP_TO_PHASE: Record<string, CreatePhase> = {
   START: "parse",
+  plan_transport: "plan_transport",
+  "transport_agent.plan_transport": "plan_transport",
   research_inspiration: "research_inspiration",
   extract_places: "extract_places",
   critique_itinerary: "critique_itinerary",
@@ -72,6 +75,7 @@ function CreatePageContent() {
 
   const mode: PlannerMode = searchParams.get("mode") === "manual" ? "manual" : "ai";
   const initialWishlist = searchParams.get("wishlist") || "";
+  const [origin, setOrigin] = useState(searchParams.get("origin") || "");
   const [destination, setDestination] = useState(searchParams.get("destination") || "");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
@@ -132,6 +136,7 @@ function CreatePageContent() {
               const data = event.data as {
                 inspirationItems?: unknown[];
                 savedPlaceCandidates?: unknown[];
+                transportPlan?: { outboundOptions?: unknown[]; returnOptions?: unknown[] };
                 critiqueResult?: { overallScore?: number };
               };
               const notes: string[] = [];
@@ -140,6 +145,9 @@ function CreatePageContent() {
               }
               if (data.savedPlaceCandidates?.length) {
                 notes.push(`已提炼 ${data.savedPlaceCandidates.length} 个候选地点`);
+              }
+              if (data.transportPlan?.outboundOptions?.length) {
+                notes.push(`已生成 ${data.transportPlan.outboundOptions.length} 个去程交通参考`);
               }
               if (typeof data.critiqueResult?.overallScore === "number") {
                 notes.push(`行程健康度 ${data.critiqueResult.overallScore}/10`);
@@ -258,7 +266,7 @@ function CreatePageContent() {
   };
 
   const handleGenerate = async () => {
-    if (!destination || isGenerating) return;
+    if (!origin || !destination || isGenerating) return;
     setIsGenerating(true);
     setStatus("正在分析需求...");
     setProgressPhase("parse");
@@ -266,7 +274,7 @@ function CreatePageContent() {
 
     const parts: string[] = [];
     const effectivePreferences = preferences.length > 0 ? preferences : (["休闲度假"] as PreferenceTag[]);
-    parts.push(`想去${destination}`);
+    parts.push(`从${origin}出发，想去${destination}`);
 
     if (startDate && endDate) {
       const start = new Date(startDate);
@@ -289,7 +297,7 @@ function CreatePageContent() {
     parts.push(`偏好${effectivePreferences.join("、")}`);
 
     if (naturalInput.trim()) {
-      parts.push(naturalInput.trim());
+      parts.push(`特殊要求：${naturalInput.trim()}`);
     }
 
     parts.push("直接帮我规划");
@@ -353,6 +361,7 @@ function CreatePageContent() {
   };
 
   const isBusy = isGenerating || isCreatingManual;
+  const canSubmit = mode === "ai" ? !!origin && !!destination && !isBusy : !!destination && !isBusy;
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-6 lg:px-8 lg:py-8">
@@ -387,25 +396,38 @@ function CreatePageContent() {
         {mode === "ai" && (
           <div>
             <label className="font-label-md text-label-md text-on-surface mb-2 block">
-              自然语言描述
+              特殊要求 / 补充说明
             </label>
             <textarea
               value={naturalInput}
               onChange={(e) => setNaturalInput(e.target.value)}
-              placeholder="例如：正在路上浅草寺和东京塔，要提前预约的那种，最好每天都能吃到拉面..."
+              placeholder="例如：不要太赶、老人小孩友好、想加入某些心愿地点、需要雨天备选..."
               className="h-32 w-full rounded-[24px] border border-outline-variant/60 bg-white/82 px-4 py-3 text-on-surface outline-none transition-colors resize-none focus:border-primary"
             />
           </div>
         )}
 
-        <div>
-          <label className="font-label-md text-label-md text-on-surface mb-2 block">目的地 *</label>
-          <input
-            value={destination}
-            onChange={(e) => setDestination(e.target.value)}
-            placeholder="输入城市或地区，如：京都、巴塔哥尼亚"
-            className="w-full rounded-[24px] border border-outline-variant/60 bg-white/82 px-4 py-3 text-on-surface outline-none transition-all focus:border-primary focus:ring-2 focus:ring-primary/15"
-          />
+        <div className="grid gap-4 sm:grid-cols-2">
+          {mode === "ai" && (
+            <div>
+              <label className="font-label-md text-label-md text-on-surface mb-2 block">出发地 *</label>
+              <input
+                value={origin}
+                onChange={(e) => setOrigin(e.target.value)}
+                placeholder="输入出发城市，如：北京、上海"
+                className="w-full rounded-[24px] border border-outline-variant/60 bg-white/82 px-4 py-3 text-on-surface outline-none transition-all focus:border-primary focus:ring-2 focus:ring-primary/15"
+              />
+            </div>
+          )}
+          <div className={mode === "ai" ? "" : "sm:col-span-2"}>
+            <label className="font-label-md text-label-md text-on-surface mb-2 block">目的地 *</label>
+            <input
+              value={destination}
+              onChange={(e) => setDestination(e.target.value)}
+              placeholder="输入城市或地区，如：京都、巴塔哥尼亚"
+              className="w-full rounded-[24px] border border-outline-variant/60 bg-white/82 px-4 py-3 text-on-surface outline-none transition-all focus:border-primary focus:ring-2 focus:ring-primary/15"
+            />
+          </div>
         </div>
 
         <div className="grid grid-cols-2 gap-4">
@@ -419,7 +441,7 @@ function CreatePageContent() {
             />
           </div>
           <div>
-            <label className="font-label-md text-label-md text-on-surface mb-2 block">结束日期</label>
+            <label className="font-label-md text-label-md text-on-surface mb-2 block">返回日期</label>
             <input
               type="date"
               value={endDate}
@@ -518,7 +540,7 @@ function CreatePageContent() {
 
         <button
           onClick={mode === "ai" ? handleGenerate : handleManualCreate}
-          disabled={!destination || isBusy}
+          disabled={!canSubmit}
           className="sticky bottom-24 z-10 flex w-full items-center justify-center gap-3 rounded-full py-4 font-label-lg text-label-lg text-white shadow-[0_18px_40px_rgba(8,35,69,0.20)] transition-all hover:-translate-y-0.5 active:scale-[0.98] disabled:opacity-50 lg:static"
           style={{ background: "linear-gradient(180deg, rgba(15,55,100,0.96) 0%, rgba(7,27,51,0.98) 100%)" }}
         >

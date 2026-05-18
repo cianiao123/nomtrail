@@ -6,6 +6,7 @@ import { useMapStore } from "@/stores/mapStore";
 import { LoadingSpinner } from "@/components/shared/LoadingSpinner";
 import { Icon } from "@/components/shared/Icon";
 import type { Activity } from "@/types/trip";
+import type { SavedPlaceCandidate } from "@/types/agent";
 
 type LngLat = [number, number];
 type MapOverlay = unknown;
@@ -110,7 +111,7 @@ async function resolveActivityCoordinate(webKey: string, destCity: string, name:
     const params = new URLSearchParams({
       key: webKey,
       city: destCity,
-      address: name,
+      address: `${destCity}${name}`,
     });
     const res = await fetch(`https://restapi.amap.com/v3/geocode/geo?${params}`);
     const data = await res.json() as { status?: string; geocodes?: { location?: string }[] };
@@ -128,6 +129,7 @@ async function searchPOI(name: string, destCity: string): Promise<LngLat | null>
     const params = new URLSearchParams({
       keyword: name,
       city: destCity,
+      strictCity: "true",
     });
     const res = await fetch(`/api/poi/search?${params}`);
     const data = await res.json() as {
@@ -221,6 +223,27 @@ function addMarker(map: AMapMap, activity: Activity, idx: number, lng: number, l
   return marker;
 }
 
+function addCandidateMarker(map: AMapMap, candidate: SavedPlaceCandidate, idx: number, lng: number, lat: number) {
+  const AMap = AMapInstance;
+  if (!AMap) throw new Error("AMap SDK is not ready");
+  const div = document.createElement("div");
+  div.innerHTML = createMarkerHTML(String(idx + 1), idx === 0);
+  const marker = new AMap.Marker({
+    position: [lng, lat],
+    content: div,
+    anchor: "bottom-center",
+    offset: new AMap.Pixel(0, -4),
+  });
+  marker.on("click", () => {
+    new AMap.InfoWindow({
+      content: `<div style="padding:14px 18px;font-family:inherit;min-width:220px"><h4 style="font-size:1rem;font-weight:700;color:#0f1f33;margin:0 0 6px 0">${candidate.name}</h4><p style="font-size:0.78rem;color:#526579;line-height:1.55;margin:0">${candidate.reason || candidate.address || candidate.city || ""}</p></div>`,
+      offset: new AMap.Pixel(0, -30),
+    }).open(map, [lng, lat]);
+  });
+  map.add(marker);
+  return marker;
+}
+
 function drawRouteLine(map: AMapMap, points: LngLat[]) {
   const AMap = AMapInstance;
   if (!AMap || points.length < 2) return;
@@ -276,6 +299,7 @@ export function MapPanel() {
   const currentTrip = useTripStore((s) => s.currentTrip);
   const updateActivity = useTripStore((s) => s.updateActivity);
   const selectedDayIndex = useMapStore((s) => s.selectedDayIndex);
+  const candidatePreviewPlaces = useMapStore((s) => s.candidatePreviewPlaces);
 
   // Initialize map once
   useEffect(() => {
@@ -312,11 +336,29 @@ export function MapPanel() {
   // Update markers when selected day changes
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || state !== "ready" || !currentTrip) return;
+    if (!map || state !== "ready") return;
 
     const renderRun = renderRunRef.current + 1;
     renderRunRef.current = renderRun;
     map.clearMap();
+
+    if (candidatePreviewPlaces.length > 0) {
+      const webKey = process.env.NEXT_PUBLIC_AMAP_WEB_KEY || "";
+      const markers: AMapMarker[] = [];
+      const markerTasks = candidatePreviewPlaces.map(async (candidate, idx) => {
+        const directPoint = toLngLat(candidate.coordinate?.lng, candidate.coordinate?.lat);
+        const point = directPoint ?? await geocodeActivity(webKey, candidate.city || currentTrip?.destination || "", candidate.name);
+        if (!point || destroyedRef.current || renderRunRef.current !== renderRun) return;
+        markers.push(addCandidateMarker(map, candidate, idx, point[0], point[1]));
+      });
+      Promise.allSettled(markerTasks).then(() => {
+        if (destroyedRef.current || renderRunRef.current !== renderRun) return;
+        fitMapToMarkers(map, markers);
+      });
+      return;
+    }
+
+    if (!currentTrip) return;
 
     const day = currentTrip.days[selectedDayIndex];
     if (!day?.activities?.length) {
@@ -369,7 +411,7 @@ export function MapPanel() {
       drawRouteLine(map, orderedPoints);
       fitMapToMarkers(map, markers);
     });
-  }, [selectedDayIndex, state, currentTrip, updateActivity]);
+  }, [selectedDayIndex, state, currentTrip, updateActivity, candidatePreviewPlaces]);
 
   if (state === "error") {
     return (

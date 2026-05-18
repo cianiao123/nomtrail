@@ -30,6 +30,7 @@ import {
   GenerateItineraryResultSchema,
   ReviseItineraryResultSchema,
   RecommendDestinationsResultSchema,
+  PlaceGuideResultSchema,
   MissingInfoResponseSchema,
   validateWithSchema,
 } from "./schemas";
@@ -38,6 +39,7 @@ import {
   PARSE_PLACES_PROMPT,
   PARSE_TRIP_PROMPT,
   RECOMMEND_DESTINATIONS_PROMPT,
+  PLACE_GUIDE_PROMPT,
   ITINERARY_AGENT_PROMPT,
   REVISE_PROMPT,
   ASK_FOLLOWUP_PROMPT,
@@ -54,10 +56,31 @@ import {
   isConstrainedServerlessRuntime,
   isRequestTerminationError,
 } from "./runtime";
+import {
+  AMAP_GEOCODE_URL,
+  AMAP_WEATHER_URL,
+  buildAmapGeocodeParams,
+  buildAmapWeatherParams,
+  normalizeAmapWeatherResponse,
+  readAdcodeFromGeocodeResponse,
+} from "@/lib/weather/amapWeather";
+import { formatWeatherAnswer, parseWeatherQuery } from "./weatherIntent";
+import { fetchAmapRoute } from "@/lib/poi/amapRoute";
 import { formatAgentNodeName } from "./agents/registry";
+import {
+  createTransportPlanFromMessage,
+  createTransportPlanFromMessages,
+  createTransportPlanFromRequirements,
+  normalizeTransportDate,
+  parseTransportRequest,
+} from "./transport";
 
 const SERVER_ANONYMOUS_USER_ID = "anonymous-server-user";
-
+const AMAP_WEB_SERVICE_KEY =
+  process.env.AMAP_WEB_SERVICE_KEY ||
+  process.env.NEXT_PUBLIC_AMAP_WEB_KEY ||
+  process.env.NEXT_PUBLIC_AMAP_KEY ||
+  "";
 import type {
   ParsedPlace,
   ItineraryVersion,
@@ -65,10 +88,149 @@ import type {
   CritiqueResult,
   SavedPlaceCandidate,
   ConfirmedPlace,
+  AgentExportPayload,
 } from "@/types/agent";
-import type { Trip, Day, ActivityType } from "@/types/trip";
+import type { Trip, Day, Activity, ActivityType, POIInfo } from "@/types/trip";
 
 // === Helpers ===
+
+function isPlaceGuideQuery(message: string) {
+  return /(?:都)?可以玩什么|怎么玩|玩法|游玩攻略|有什么好玩|玩什么|怎么逛|值得玩/.test(message);
+}
+
+const CITY_PLACE_RECOMMENDATION_NAMES = new Set([
+  "北京",
+  "上海",
+  "广州",
+  "深圳",
+  "成都",
+  "重庆",
+  "杭州",
+  "南京",
+  "西安",
+  "武汉",
+  "长沙",
+  "苏州",
+  "厦门",
+  "青岛",
+  "郑州",
+  "天津",
+  "三亚",
+  "大理",
+  "桂林",
+  "大阪",
+  "东京",
+  "京都",
+]);
+
+function readCityPlaceRecommendationCity(message: string) {
+  const match = message.trim().match(/^([\u4e00-\u9fa5]{2,8})(?:市)?(?:有)?(?:什么|啥|哪里|哪儿).*(?:好玩|好吃|逛|推荐|景点|玩法)/);
+  const city = match?.[1]?.replace(/市$/, "").replace(/有$/, "") ?? "";
+  return CITY_PLACE_RECOMMENDATION_NAMES.has(city) ? city : "";
+}
+
+function isCityPlaceRecommendationQuery(message: string) {
+  return !!readCityPlaceRecommendationCity(message);
+}
+
+function recommendationsToSavedPlaceCandidates(
+  city: string,
+  result: { title: string; recommendations: { city: string; highlight: string; reason: string }[] }
+): SavedPlaceCandidate[] {
+  return result.recommendations.map((item, index) => ({
+    name: item.city,
+    city,
+    category: inferCandidateCategory(`${item.city} ${item.highlight} ${item.reason}`),
+    priorityTag: index < 3 ? "must_go" : "nearby_optional",
+    reason: `${item.highlight}：${item.reason}`,
+    sourceRefs: [result.title],
+    qualityScore: Math.max(0.55, 0.82 - index * 0.04),
+  }));
+}
+
+function inferCandidateCategory(text: string): SavedPlaceCandidate["category"] {
+  if (/吃|餐|美食|小吃|咖啡|火锅|烧烤|酒吧|夜市/.test(text)) return "food";
+  if (/酒店|住宿|民宿/.test(text)) return "hotel";
+  if (/机场|车站|交通|码头/.test(text)) return "transport";
+  if (/景点|公园|博物馆|故宫|长城|寺|宫|山|湖|海|古镇|街区|胡同|广场|园/.test(text)) return "attraction";
+  return "other";
+}
+
+async function answerWeatherQuery(message: string) {
+  const query = parseWeatherQuery(message);
+  if (!query) return "";
+  if (!AMAP_WEB_SERVICE_KEY) return `我现在还查不了${query.city}天气，因为高德 Web 服务 Key 没配置好。`;
+
+  const geocodeParams = buildAmapGeocodeParams({ key: AMAP_WEB_SERVICE_KEY, address: query.city });
+  const geocodeRes = await fetch(`${AMAP_GEOCODE_URL}?${geocodeParams}`, { cache: "no-store" });
+  const geocodeData = await geocodeRes.json();
+  const adcode = readAdcodeFromGeocodeResponse(geocodeData);
+  if (!adcode) return `暂时没有查到${query.city}的天气城市编码。`;
+
+  const weatherParams = buildAmapWeatherParams({
+    key: AMAP_WEB_SERVICE_KEY,
+    city: adcode,
+    extensions: "all",
+  });
+  const weatherRes = await fetch(`${AMAP_WEATHER_URL}?${weatherParams}`, { cache: "no-store" });
+  const weatherData = await weatherRes.json();
+  return formatWeatherAnswer(message, normalizeAmapWeatherResponse(weatherData, query.days));
+}
+
+type PlaceGuideSpotDraft = {
+  name: string;
+  imageKeyword: string;
+  highlight: string;
+  description: string;
+  duration: string;
+  suitableFor: string;
+};
+
+function buildKnownPlaceGuide(message: string) {
+  if (!/亚龙湾/.test(message)) return null;
+
+  return {
+    placeName: "亚龙湾",
+    title: "亚龙湾游玩攻略",
+    intro: "亚龙湾适合海滩玩水、热带雨林观景和轻度水上项目，玩法集中在海岸线和周边景区。",
+    bestTime: "上午海水颜色更清透，傍晚适合沙滩散步和拍照。",
+    tips: ["注意防晒和补水", "水上项目先确认价格和保险", "森林公园建议预留半天"],
+    spots: [
+      {
+        name: "亚龙湾沙滩",
+        imageKeyword: "亚龙湾沙滩",
+        highlight: "海滩玩水",
+        description: "亚龙湾核心海滩沙质细、海水颜色层次清楚，适合散步、拍照、玩水和放空。",
+        duration: "1.5-2小时",
+        suitableFor: "亲子、情侣、第一次来三亚",
+      },
+      {
+        name: "亚龙湾热带天堂森林公园",
+        imageKeyword: "亚龙湾热带天堂森林公园",
+        highlight: "雨林观景",
+        description: "可以俯瞰亚龙湾海岸线，也有雨林栈道和观景平台，适合把海景和山景一起安排。",
+        duration: "3-4小时",
+        suitableFor: "喜欢观景、拍照和轻徒步的人",
+      },
+      {
+        name: "百福湾",
+        imageKeyword: "三亚百福湾",
+        highlight: "潜水浮潜",
+        description: "相对更偏海上体验，适合浮潜、潜水或坐船看海，出行前需要确认当天海况。",
+        duration: "2-3小时",
+        suitableFor: "水上项目爱好者",
+      },
+      {
+        name: "太阳湾公路",
+        imageKeyword: "三亚太阳湾公路",
+        highlight: "海岸公路",
+        description: "沿海公路视野开阔，适合自驾、骑行或短暂停靠拍海景，但不建议长时间占道停留。",
+        duration: "30-60分钟",
+        suitableFor: "自驾、拍照、情侣出行",
+      },
+    ] satisfies PlaceGuideSpotDraft[],
+  };
+}
 
 /** Build conversation context string from history + current message */
 function buildConversationContext(state: TravelAgentState): string {
@@ -77,6 +239,57 @@ function buildConversationContext(state: TravelAgentState): string {
     .map((m) => `${m.role === "user" ? "用户" : "助手"}: ${m.content}`)
     .join("\n");
   return history || state.currentMessage;
+}
+
+function buildRecommendationUserMessage(state: TravelAgentState): string {
+  return buildConversationContext(state);
+}
+
+function isRecommendationFollowUp(message: string, state: TravelAgentState) {
+  const text = message.trim();
+  if (!text) return false;
+  const previousConversation = (state.conversationHistory ?? []).slice(0, -1);
+  const hadRecommendationContext = previousConversation.some((item) =>
+    /适合你的旅行目的地|我先给你 5 个方向|推荐|目的地|哪里旅游|去哪儿玩|哪里玩|周末适合去哪里/.test(item.content)
+  );
+  if (!hadRecommendationContext) return false;
+
+  return /^(我人在|人在|我在|从|出发地|预算|人均|周末|这周末|本周末|带|和|想要|偏好)/.test(text)
+    || /^我人在北京$/.test(text);
+}
+
+function buildTransportPlanFromState(state: TravelAgentState) {
+  const fromRequirements = createTransportPlanFromRequirements(state.parsedTripRequirements ?? {});
+  if (fromRequirements) return fromRequirements;
+
+  const messages = [
+    ...(state.conversationHistory ?? []).map((item) => item.content),
+    state.currentMessage ?? "",
+  ];
+  return createTransportPlanFromMessages(
+    messages,
+    state.parsedTripRequirements?.startDate ?? new Date().toISOString().slice(0, 10)
+  );
+}
+
+function buildSelectedTransportContext(state: TravelAgentState): string {
+  const plan = state.transportPlan;
+  if (!plan || !state.transportConfirmed) return "未确认，按常规首末日轻量安排。";
+
+  const outbound = plan.outboundOptions.find((option) => option.id === plan.selectedOutboundId);
+  const returning = plan.returnOptions.find((option) => option.id === plan.selectedReturnId);
+  const lines = [];
+  if (outbound) {
+    lines.push(
+      `- 去程：${plan.departDate} ${outbound.fromName} ${outbound.departTime} 出发，${outbound.toName} ${outbound.arriveTime} 到达；第一天游玩从到达后开始，并预留入住/寄存行李时间。`
+    );
+  }
+  if (returning && plan.returnDate) {
+    lines.push(
+      `- 回程：${plan.returnDate} ${returning.fromName} ${returning.departTime} 出发，${returning.toName} ${returning.arriveTime} 到达；最后一天活动需在返程前结束，并预留去车站/机场时间。`
+    );
+  }
+  return lines.join("\n") || "未确认，按常规首末日轻量安排。";
 }
 
 function logAction(
@@ -178,18 +391,22 @@ function normalizeParsedBudget(
   const min = typeof budget.min === "number" ? budget.min : 0;
   const max = typeof budget.max === "number" ? budget.max : fallback?.max;
   if (typeof max !== "number") return fallback;
+  if (min > 0 && min <= 12 && max >= 1900 && max <= 2100) return fallback;
   return { min, max };
 }
 
 function parseBudgetFromMessage(message: string): { min: number; max: number } | undefined {
   const text = message
     .replace(/,/g, "")
-    .replace(/[￥¥]/g, "")
     .replace(/\s+/g, "");
 
   if (/预算[:：]?不限|不限预算|预算不限/.test(text)) return undefined;
 
-  const rangeMatch = text.match(/(\d+)(?:元|块|rmb|cny)?(?:-|~|到|至|—)(\d+)(?:元|块|rmb|cny)?/i);
+  const rangeMatch =
+    text.match(/预算[:：]?(?:大概|约|在|控制在)?[￥¥]?(\d+)(?:元|块|rmb|cny)?(?:-|~|到|至|—)(?:[￥¥]?)(\d+)(?:元|块|rmb|cny)?/i) ??
+    text.match(/[￥¥](\d+)(?:元|块|rmb|cny)?(?:-|~|到|至|—)(?:[￥¥]?)(\d+)(?:元|块|rmb|cny)?/i) ??
+    text.match(/(\d+)(?:元|块|rmb|cny)(?:-|~|到|至|—)(\d+)(?:元|块|rmb|cny)?/i) ??
+    text.match(/(\d+)(?:-|~|到|至|—)(\d+)(?:元|块|rmb|cny)/i);
   if (rangeMatch) {
     const min = Number(rangeMatch[1]);
     const max = Number(rangeMatch[2]);
@@ -220,6 +437,10 @@ function formatBudget(budget?: { min?: number | null; max?: number | null } | nu
   return `¥${min}-${budget.max}`;
 }
 
+function appendChecklistOffer(message: string): string {
+  return `${message.trim()}\n\n需要我再为你生成一份旅行必备清单吗？可以包含证件、衣物、药品、充电设备、预订事项和当地注意事项。`;
+}
+
 function hasExplicitTravelerCount(message: string): boolean {
   const text = message.replace(/\s+/g, "");
   return /(?:\d+|[一二两三四五六七八九十])(?:个)?(?:人|成人|大人|小孩|孩子|儿童|宝宝)|一家(?:三|四|五|六|七|八|九|十|\d)口|情侣|夫妻|两口子|双人|单人/.test(text);
@@ -229,6 +450,64 @@ function createTimeoutSignal(timeoutMs: number): AbortSignal {
   const controller = new AbortController();
   setTimeout(() => controller.abort(), timeoutMs);
   return controller.signal;
+}
+
+async function fetchAmapPoiPhoto(keyword: string, city = "") {
+  const key = (
+    process.env.AMAP_WEB_SERVICE_KEY ||
+    process.env.NEXT_PUBLIC_AMAP_WEB_KEY ||
+    process.env.NEXT_PUBLIC_AMAP_KEY ||
+    ""
+  ).trim();
+  if (!key) return "";
+
+  try {
+    const params = new URLSearchParams({
+      key,
+      keywords: keyword,
+      city,
+      offset: "1",
+      page: "1",
+      extensions: "all",
+    });
+    if (city.trim()) params.set("citylimit", "true");
+    const res = await fetch(`https://restapi.amap.com/v3/place/text?${params}`, {
+      signal: createTimeoutSignal(3000),
+    });
+    const data = (await res.json()) as {
+      status?: string;
+      pois?: Array<{ photos?: Array<{ url?: string }> }>;
+    };
+    return data.status === "1" ? data.pois?.[0]?.photos?.[0]?.url ?? "" : "";
+  } catch {
+    return "";
+  }
+}
+
+async function attachPlaceGuidePhotos(
+  placeName: string,
+  spots: PlaceGuideSpotDraft[]
+) {
+  const city = /亚龙湾|三亚|海棠湾|大东海|天涯海角/.test(placeName) ? "三亚" : "";
+  const fallbackPhoto = await fetchAmapPoiPhoto(placeName, city);
+
+  return Promise.all(
+    spots.map(async (spot) => {
+      const imageUrl =
+        await fetchAmapPoiPhoto(spot.imageKeyword || spot.name, city)
+        || await fetchAmapPoiPhoto(`${placeName}${spot.name}`, city)
+        || fallbackPhoto;
+
+      return {
+        name: spot.name,
+        imageUrl,
+        highlight: spot.highlight,
+        description: spot.description,
+        duration: spot.duration,
+        suitableFor: spot.suitableFor,
+      };
+    })
+  );
 }
 
 function remainingRequestMs(state: TravelAgentState): number {
@@ -359,6 +638,219 @@ function dateForDay(startDate: string, dayIndex: number): string {
   return new Date(new Date(startDate).getTime() + (dayIndex - 1) * 86400000)
     .toISOString()
     .slice(0, 10);
+}
+
+function formatCoordinateForPrompt(coordinate?: { lat: number; lng: number }): string {
+  if (!coordinate) return "";
+  if (!Number.isFinite(coordinate.lat) || !Number.isFinite(coordinate.lng)) return "";
+  if (coordinate.lat === 0 && coordinate.lng === 0) return "";
+  return `；坐标：${coordinate.lng.toFixed(6)},${coordinate.lat.toFixed(6)}`;
+}
+
+function formatPlaceForRoutePrompt(place: {
+  name: string;
+  category: string;
+  reason?: string;
+  notes?: string;
+  openingHours?: string;
+  coordinate?: { lat: number; lng: number };
+  sourceRefs?: string[];
+}) {
+  const sourceLabel = place.sourceRefs?.includes("探索页心愿池") ? "[心愿地] " : "";
+  const detail = place.reason ?? place.notes ?? "";
+  const openingHours = place.openingHours ? `；开放时间参考：${place.openingHours}` : "";
+  return `- ${sourceLabel}${place.name} (${place.category})${formatCoordinateForPrompt(place.coordinate)}: ${detail}${openingHours}`;
+}
+
+type RouteKnownPlace = {
+  name: string;
+  category: ActivityType | SavedPlaceCandidate["category"];
+  address?: string;
+  coordinate?: { lat: number; lng: number };
+  openingHours?: string;
+  ticketReference?: string | null;
+};
+
+function buildRouteKnownPlaces(
+  savedCandidates: SavedPlaceCandidate[],
+  confirmedPlaces: ConfirmedPlace[]
+) {
+  return [
+    ...confirmedPlaces,
+    ...savedCandidates,
+  ].filter((place) => place.coordinate);
+}
+
+function findKnownPlaceForActivity(
+  activity: Activity,
+  knownPlaces: RouteKnownPlace[]
+) {
+  const activityName = normalizeWishlistName(activity.customName ?? activity.poi?.name ?? "");
+  if (!activityName) return undefined;
+  return knownPlaces.find((place) => {
+    const placeName = normalizeWishlistName(place.name);
+    return placeName === activityName || activityName.includes(placeName) || placeName.includes(activityName);
+  });
+}
+
+function poiFromKnownPlace(place: RouteKnownPlace): POIInfo | null {
+  if (!place.coordinate) return null;
+  return {
+    amapId: "",
+    name: place.name,
+    address: place.address ?? "",
+    coordinate: place.coordinate,
+    category: place.category,
+    photos: [],
+    openingHours: place.openingHours,
+    priceRange: place.ticketReference ?? undefined,
+  };
+}
+
+function coordinateOfActivity(activity: Activity) {
+  const coordinate = activity.poi?.coordinate;
+  if (!coordinate) return undefined;
+  if (!Number.isFinite(coordinate.lat) || !Number.isFinite(coordinate.lng)) return undefined;
+  if (coordinate.lat === 0 && coordinate.lng === 0) return undefined;
+  return coordinate;
+}
+
+function routeDistanceKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
+  const toRad = (value: number) => value * Math.PI / 180;
+  const earthKm = 6371;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+  const h =
+    Math.sin(dLat / 2) ** 2
+    + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return 2 * earthKm * Math.asin(Math.sqrt(h));
+}
+
+function estimateCityTravelMinutes(distanceKm: number) {
+  if (!Number.isFinite(distanceKm) || distanceKm <= 0) return 0;
+  return Math.max(6, Math.round((distanceKm / 22) * 60));
+}
+
+async function estimateRouteMinutesBetween(
+  origin: { lat: number; lng: number },
+  destination: { lat: number; lng: number }
+) {
+  const distanceKm = routeDistanceKm(origin, destination);
+  const mode = distanceKm <= 2.5 ? "walking" : "driving";
+  const route = await fetchAmapRoute({
+    mode,
+    origin: { lng: origin.lng, lat: origin.lat },
+    destination: { lng: destination.lng, lat: destination.lat },
+  });
+  return route
+    ? Math.max(1, Math.round(route.durationSeconds / 60))
+    : estimateCityTravelMinutes(distanceKm);
+}
+
+function minutesFromTime(value?: string) {
+  const match = value?.match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return undefined;
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+function timeFromMinutes(value: number) {
+  const normalized = Math.max(0, Math.min(23 * 60 + 59, Math.round(value)));
+  const hours = Math.floor(normalized / 60);
+  const minutes = normalized % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
+async function optimizeDayRouteOrder(day: Day): Promise<Day> {
+  if (day.activities.length < 3) return day;
+  const remaining = [...day.activities].sort((a, b) => a.order - b.order);
+  const ordered: Activity[] = [];
+  const first = remaining.shift();
+  if (!first) return day;
+  ordered.push(first);
+
+  while (remaining.length) {
+    const currentCoord = coordinateOfActivity(ordered[ordered.length - 1]);
+    if (!currentCoord) {
+      ordered.push(remaining.shift()!);
+      continue;
+    }
+
+    let bestIndex = 0;
+    let bestScore = Number.POSITIVE_INFINITY;
+    remaining.forEach((candidate, index) => {
+      const candidateCoord = coordinateOfActivity(candidate);
+      const distanceScore = candidateCoord
+        ? routeDistanceKm(currentCoord, candidateCoord)
+        : 20;
+      const foodAfterHotelPenalty =
+        ordered[ordered.length - 1].type === "hotel"
+        && candidate.type === "food"
+        && distanceScore > 3
+          ? 15
+          : 0;
+      const score = distanceScore + foodAfterHotelPenalty + index * 0.01;
+      if (score < bestScore) {
+        bestScore = score;
+        bestIndex = index;
+      }
+    });
+    ordered.push(remaining.splice(bestIndex, 1)[0]);
+  }
+
+  let cursor = minutesFromTime(day.activities[0]?.startTime) ?? 9 * 60;
+  const activities: Activity[] = [];
+  for (let index = 0; index < ordered.length; index += 1) {
+    const activity = ordered[index];
+    const prev = index > 0 ? ordered[index - 1] : undefined;
+    const prevCoord = prev ? coordinateOfActivity(prev) : undefined;
+    const coord = coordinateOfActivity(activity);
+    const travelMinutesFromPrev = prevCoord && coord
+      ? await estimateRouteMinutesBetween(prevCoord, coord)
+      : activity.travelMinutesFromPrev;
+    if (index > 0 && typeof travelMinutesFromPrev === "number") {
+      cursor += travelMinutesFromPrev;
+    }
+    const startTime = timeFromMinutes(cursor);
+    cursor += activity.durationMinutes ?? activity.recommendedDuration ?? 60;
+    const endTime = timeFromMinutes(cursor);
+    activities.push({
+      ...activity,
+      order: index + 1,
+      startTime,
+      endTime,
+      travelMinutesFromPrev,
+    });
+  }
+
+  return { ...day, activities };
+}
+
+async function attachKnownPoiAndOptimizeRoutes(
+  days: Day[],
+  savedCandidates: SavedPlaceCandidate[],
+  confirmedPlaces: ConfirmedPlace[]
+) {
+  const knownPlaces = buildRouteKnownPlaces(savedCandidates, confirmedPlaces);
+  const enrichedDays = days.map((day) => ({
+    ...day,
+    activities: day.activities.map((activity) => {
+      if (activity.poi) return activity;
+      const knownPlace = findKnownPlaceForActivity(activity, knownPlaces);
+      const poi = knownPlace ? poiFromKnownPlace(knownPlace) : null;
+      return poi
+        ? {
+            ...activity,
+            poi,
+            customName: activity.customName ?? poi.name,
+            openingHours: activity.openingHours ?? poi.openingHours,
+            ticketReference: activity.ticketReference ?? poi.priceRange,
+          }
+        : activity;
+    }),
+  }));
+  return Promise.all(enrichedDays.map(optimizeDayRouteOrder));
 }
 
 function buildFastItineraryDraft({
@@ -917,6 +1409,16 @@ export async function classifyIntentNode(
   }
 
   const msg = state.currentMessage ?? "";
+  if (isTripDurationAdviceQuery(msg)) {
+    return {
+      intent: "recommendDestinations",
+      intentConfidence: 0.95,
+      actionLog: [
+        logAction(state, "classify_intent", "keyword: duration_advice", Date.now() - t0),
+      ],
+    };
+  }
+
   const quickIntent = detectQuickIntent(msg, state);
 
   // Use keyword detection if it's a clear match — skip LLM for speed
@@ -970,6 +1472,12 @@ export async function classifyIntentNode(
 }
 
 /** Keyword-based quick intent detection as LLM fallback */
+function isTripDurationAdviceQuery(msg: string) {
+  const text = msg.trim();
+  return /(?:适合|建议|推荐|一般|通常|大概|最好)?.{0,12}(?:玩|游玩|旅行|旅游|安排|待|待上|留).{0,8}(?:几天|多少天|几晚|多久).{0,12}(?:合适|比较好|够|够不够)?/.test(text)
+    || /(?:几天|多少天|几晚|多久).{0,12}(?:合适|比较好|够|够不够)/.test(text);
+}
+
 function detectQuickIntent(
   msg: string,
   state: TravelAgentState
@@ -979,12 +1487,14 @@ function detectQuickIntent(
 
   const createPatterns = /想去|去.+玩|玩(?:儿)?\s*\d+\s*天|计划玩|安排.*行程|规划.*行程|做个行程|生成行程|继续帮我规划|按这个目的地继续/;
   const recommendPatterns = /推荐.*(城市|目的地|地方|国家)|适合.*(旅游|旅行|度假).*(城市|地方|国家)|去哪里玩|去哪儿玩|有什么.*目的地|想找.*旅行地/;
+  const placeGuidePatterns = /(?:都)?可以玩什么|怎么玩|玩法|游玩攻略|有什么好玩|玩什么|怎么逛|值得玩/;
   const explicitTripInfoPatterns = /\d+\s*天|\d+\s*晚|预算|人均|\d+\s*人|自由行|亲子|蜜月|城市漫步|美食|海岛|避暑|打卡/;
   const placeListPatterns = /、|，|,|还有|以及|下面|收藏|笔记|景点|餐厅|咖啡|酒店|必去|想去|打卡/;
   const tripScopedAddPatterns = /第[一二三四五六七八九十0-9]+天.*(想去|加入|加上|安排)|想去.+(加进|加入|安排到).*(行程|第[一二三四五六七八九十0-9]+天)|把.+加到.+(行程|第[一二三四五六七八九十0-9]+天)/;
   const revisePatterns = /太赶|太累|太满|太多|太少|太松|松散|加(?:一)?个|添加|加入|加进|去掉|删除|换成|替换|修改|改成|轻松|放松|紧凑|充实|多玩|室内|雨天|亲子|预算低|便宜/;
   const critiquePatterns = /合理|检查|看看|顺路|绕路|可以不|会不会|怎么样|行不行|体检|评估|问题/;
   const exportPatterns = /导出|分享|发送|复制|下载|markdown|notion|清单/;
+  const checklistAcceptancePatterns = /^(需要|要|可以|好|好的|来一份|生成|帮我生成|做一份|要的|需要的)$/;
   const generatePatterns = /开始规划|开始创建|生成(?:行程)?|直接(?:生成|规划|安排)|帮我(?:规划|安排|排)|你(?:来|帮我|定|安排)|规划吧|开始吧|可以了|好了|确认创建/;
   const editInfoPatterns = /^修改信息$|^继续修改$|改信息|重新填|补充信息/;
   const noMorePlacesPatterns = /^没有$|^不用了?$|^不需要$|^没了$|^先这样$/;
@@ -1002,11 +1512,20 @@ function detectQuickIntent(
     && !!(reqs.dayCount || (reqs.startDate && reqs.endDate))
     && !!reqs.preferences?.length;
 
+  if (placeGuidePatterns.test(text)) return "recommendDestinations";
+  if (isRecommendationFollowUp(text, state)) return "recommendDestinations";
+
   if (!hasTrip && !hasParsedReqs && recommendPatterns.test(text) && !explicitTripInfoPatterns.test(text)) {
     return "recommendDestinations";
   }
 
-  if (hasItinerary && exportPatterns.test(text)) return "exportItinerary";
+  const lastAssistantMessage = [...(state.conversationHistory ?? [])]
+    .reverse()
+    .find((item) => item.role === "agent")?.content ?? "";
+  const isAnsweringChecklistOffer =
+    /旅行必备清单|行前清单/.test(lastAssistantMessage) && checklistAcceptancePatterns.test(text);
+
+  if (hasItinerary && (exportPatterns.test(text) || isAnsweringChecklistOffer)) return "exportItinerary";
   if (hasItinerary && critiquePatterns.test(text) && /会不会|是否|合理|行不行|可以不|检查|看看|评估|体检/.test(text)) {
     return "critiqueItinerary";
   }
@@ -1045,9 +1564,120 @@ export async function recommendDestinationsNode(
   const t0 = Date.now();
 
   try {
+    if (isTripDurationAdviceQuery(state.currentMessage ?? "")) {
+      const reply = await deepseekClient.generateText(
+        [
+          {
+            role: "system",
+            content:
+              "你是目的地玩法建议助手。用户在问某个地方适合玩几天时，请做归纳总结：先给推荐天数，再说明短住/标准/深度玩法分别适合什么，不要进入正式行程规划，也不要要求用户补全日期、预算、人数。",
+          },
+          { role: "user", content: state.currentMessage ?? "" },
+        ],
+        { temperature: 0.35, maxTokens: 320 }
+      );
+
+      return {
+        assistantMessage: reply.trim(),
+        actionLog: [
+          logAction(
+            state,
+            "recommend_destinations",
+            "duration advice summary",
+            Date.now() - t0
+          ),
+        ],
+      };
+    }
+
+    const cityPlaceRecommendationCity = readCityPlaceRecommendationCity(state.currentMessage ?? "");
+    if (isCityPlaceRecommendationQuery(state.currentMessage ?? "")) {
+      const prompt = RECOMMEND_DESTINATIONS_PROMPT.replace(
+        "{userMessage}",
+        buildRecommendationUserMessage(state)
+      );
+
+      const parsed = await deepseekClient.generateJson(
+        [
+          { role: "system", content: "你是城市内 POI 推荐助手。只输出合法 JSON。推荐必须是用户指定城市里的具体地点、街区、餐厅或玩法，不要推荐其他城市。" },
+          { role: "user", content: prompt },
+        ],
+        { temperature: 0.4, maxTokens: 900 }
+      );
+      const result = validateWithSchema(
+        RecommendDestinationsResultSchema,
+        parsed,
+        "recommend_destinations"
+      );
+      const candidates = recommendationsToSavedPlaceCandidates(cityPlaceRecommendationCity, result);
+
+      return {
+        assistantMessage: result.intro,
+        savedPlaceCandidates: candidates,
+        selectedSavedPlaces: [],
+        candidatePoolConfirmed: false,
+        needsHumanConfirmation: candidates.length > 0,
+        pendingConfirmationType: "candidates",
+        pendingMessage: candidates.length > 0
+          ? `我先把${cityPlaceRecommendationCity}值得去的地点整理成候选 POI，你可以点选想加入行程的地方。`
+          : result.intro,
+        actionLog: [
+          logAction(
+            state,
+            "recommend_destinations",
+            `local candidates=${candidates.length}`,
+            Date.now() - t0
+          ),
+        ],
+      };
+    }
+
+    if (isPlaceGuideQuery(state.currentMessage ?? "")) {
+      const knownGuide = buildKnownPlaceGuide(state.currentMessage ?? "");
+      const result = knownGuide ?? validateWithSchema(
+        PlaceGuideResultSchema,
+        await deepseekClient.generateJson(
+          [
+            { role: "system", content: "你是景点游玩攻略助手。只输出合法 JSON。所有玩法必须围绕用户询问的同一个地点，不要跨城市推荐。" },
+            {
+              role: "user",
+              content: PLACE_GUIDE_PROMPT.replace(
+                "{userMessage}",
+                state.currentMessage ?? ""
+              ),
+            },
+          ],
+          { temperature: 0.25, maxTokens: 1300 }
+        ),
+        "place_guide"
+      );
+      const spots = await attachPlaceGuidePhotos(result.placeName, result.spots);
+
+      return {
+        assistantMessage: result.intro,
+        responsePayload: {
+          type: "place_guide_card",
+          placeName: result.placeName,
+          title: result.title,
+          intro: result.intro,
+          bestTime: result.bestTime,
+          tips: result.tips,
+          spots,
+        },
+        actionLog: [
+          logAction(
+            state,
+            "place_guide",
+            `generated ${result.spots.length} spots for ${result.placeName}`,
+            Date.now() - t0
+          ),
+        ],
+      };
+    }
+
     const prompt = RECOMMEND_DESTINATIONS_PROMPT.replace(
       "{userMessage}",
-      state.currentMessage ?? ""
+      buildRecommendationUserMessage(state)
     );
 
     const parsed = await deepseekClient.generateJson(
@@ -1103,6 +1733,16 @@ export async function generalChatNode(
   const t0 = Date.now();
 
   try {
+    const weatherAnswer = await answerWeatherQuery(state.currentMessage ?? "");
+    if (weatherAnswer) {
+      return {
+        assistantMessage: weatherAnswer,
+        actionLog: [
+          logAction(state, "general_chat", "answered weather query", Date.now() - t0),
+        ],
+      };
+    }
+
     const reply = await deepseekClient.generateText(
       [
         {
@@ -1225,7 +1865,48 @@ export async function parsePlacesNode(
   }
 }
 
-// === Node 4: generate_itinerary ===
+// === Node 4: plan_transport ===
+
+export async function planTransportNode(
+  state: TravelAgentState
+): Promise<Partial<TravelAgentState>> {
+  const t0 = Date.now();
+  const plan =
+    createTransportPlanFromMessage(state.currentMessage ?? "") ??
+    buildTransportPlanFromState(state);
+
+  if (!plan) {
+    return {
+      actionLog: [
+        logAction(
+          state,
+          "plan_transport",
+          "skipped: no cross-city transport request",
+          Date.now() - t0
+        ),
+      ],
+    };
+  }
+
+  return {
+    transportPlan: plan,
+    transportConfirmed: false,
+    needsHumanConfirmation: true,
+    pendingConfirmationType: "transport",
+    pendingMessage: "太好了，旅行信息已经齐了。第一步我先帮你把往返大交通排出来，选好后我会按照到达和返程时间继续安排游玩节奏。",
+    assistantMessage: "",
+    actionLog: [
+      logAction(
+        state,
+        "plan_transport",
+        `mock ${plan.origin}->${plan.destination}, outbound=${plan.outboundOptions.length}, return=${plan.returnOptions.length}`,
+        Date.now() - t0
+      ),
+    ],
+  };
+}
+
+// === Node 5: generate_itinerary ===
 
 export async function researchInspirationNode(
   state: TravelAgentState
@@ -1256,7 +1937,13 @@ export async function researchInspirationNode(
     return {
       inspirationItems: result.inspirationItems,
       savedPlaceCandidates: result.savedPlaceCandidates,
-      selectedSavedPlaces: result.savedPlaceCandidates,
+      selectedSavedPlaces: [],
+      candidatePoolConfirmed: result.savedPlaceCandidates.length === 0,
+      needsHumanConfirmation: result.savedPlaceCandidates.length > 0,
+      pendingConfirmationType: result.savedPlaceCandidates.length > 0 ? "candidates" : undefined,
+      pendingMessage: result.savedPlaceCandidates.length > 0
+        ? "交通搞定了。接下来是第二步：我先整理 10 个候选地点，你可以点选想加入行程的地点，也可以不选，让我自动取舍后继续细致规划。"
+        : "",
       assistantMessage: "",
       actionLog: [
         logAction(state, "xhs_search", `xhs=${result.debug.xhsCount}`, Date.now() - t0),
@@ -1327,10 +2014,10 @@ export async function generateItineraryNode(
     const mappedMustGo = savedCandidates.filter((p) => p.priorityTag === "must_go" || p.priorityTag === "food_candidate");
     const mappedOptional = savedCandidates.filter((p) => p.priorityTag !== "must_go" && p.priorityTag !== "food_candidate");
     mustGoStr = mappedMustGo
-      .map((p) => `- ${p.sourceRefs?.includes("探索页心愿池") ? "[心愿地] " : ""}${p.name} (${p.category}): ${p.reason}${p.openingHours ? `；开放时间参考：${p.openingHours}` : ""}`)
+      .map(formatPlaceForRoutePrompt)
       .join("\n");
     optionalStr = mappedOptional
-      .map((p) => `- ${p.sourceRefs?.includes("探索页心愿池") ? "[心愿地] " : ""}${p.name} (${p.category}): ${p.reason}`)
+      .map(formatPlaceForRoutePrompt)
       .join("\n") || "无";
     inspirationSummary = (state.inspirationItems ?? [])
       .slice(0, 4)
@@ -1340,8 +2027,8 @@ export async function generateItineraryNode(
     mustGoStr = `（用户未指定具体地点，请根据目的地"${destination}"和偏好推荐最值得去的景点、餐厅等）`;
     optionalStr = "无";
   } else {
-    mustGoStr = mustGo.map((p) => `- ${p.name} (${p.category}): ${p.notes ?? ""}`).join("\n");
-    optionalStr = optional.map((p) => `- ${p.name} (${p.category}): ${p.notes ?? ""}`).join("\n") || "无";
+    mustGoStr = mustGo.map(formatPlaceForRoutePrompt).join("\n");
+    optionalStr = optional.map(formatPlaceForRoutePrompt).join("\n") || "无";
   }
 
   try {
@@ -1370,6 +2057,7 @@ export async function generateItineraryNode(
       .replace("{budgetMax}", String(budgetMax))
       .replace("{preferences}", preferences.join("、") || "无特殊偏好")
       .replace("{pace}", "moderate")
+      .replace("{transportContext}", buildSelectedTransportContext(state))
       .replace("{mustGoPlaces}", mustGoStr)
       .replace("{optionalPlaces}", optionalStr)
       .replace("{inspirationSummary}", inspirationSummary || "无")
@@ -1474,11 +2162,11 @@ export async function generateItineraryNode(
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     }));
-    const days = appendMissingWishlistActivities(
+    const days = await attachKnownPoiAndOptimizeRoutes(appendMissingWishlistActivities(
       generatedDays,
       wishlistNames,
       state.threadId
-    );
+    ), savedCandidates, places);
 
     const summary = validated.days
       .map((d) => `Day ${d.dayIndex}: ${d.theme ?? ""} (${d.activities.length}个活动)`)
@@ -1495,7 +2183,7 @@ export async function generateItineraryNode(
           budgetMax,
         },
       },
-      assistantMessage: `已为你生成 ${dayCount} 天的行程：\n\n${summary}\n\n${validated.overallTips ?? ""}`,
+      assistantMessage: appendChecklistOffer(`已为你生成 ${dayCount} 天的行程：\n\n${summary}\n\n${validated.overallTips ?? ""}`),
       actionLog: [
         logAction(
           state,
@@ -1572,11 +2260,11 @@ export async function generateItineraryNode(
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       }));
-      const days = appendMissingWishlistActivities(
+      const days = await attachKnownPoiAndOptimizeRoutes(appendMissingWishlistActivities(
         fallbackDays,
         wishlistNames,
         state.threadId
-      );
+      ), savedCandidates, places);
       const summary = fallbackDraft.days
         .map((d) => `Day ${d.dayIndex}: ${d.theme ?? ""} (${d.activities.length}个活动)`)
         .join("\n");
@@ -1592,7 +2280,7 @@ export async function generateItineraryNode(
             budgetMax,
           },
         },
-        assistantMessage: `生成耗时较长，我先为你生成一版快速行程：\n\n${summary}\n\n${fallbackDraft.overallTips ?? ""}`,
+        assistantMessage: appendChecklistOffer(`生成耗时较长，我先为你生成一版快速行程：\n\n${summary}\n\n${fallbackDraft.overallTips ?? ""}`),
         actionLog: [
           logAction(
             state,
@@ -1833,8 +2521,16 @@ export async function normalizeActivitiesNode(
       });
     }
 
+    const optimizedDays = await attachKnownPoiAndOptimizeRoutes(
+      days,
+      state.selectedSavedPlaces?.length
+        ? state.selectedSavedPlaces
+        : state.savedPlaceCandidates ?? [],
+      state.confirmedPlaces ?? []
+    );
+
     return {
-      itineraryDraft: { ...draft, days },
+      itineraryDraft: { ...draft, days: optimizedDays },
       actionLog: [logAction(state, "normalize_activities", `${v.activities.length} activities normalized`, Date.now() - t0)],
     };
   } catch (err) {
@@ -2330,14 +3026,54 @@ export async function exportItineraryNode(
   let format: "friend_summary" | "detailed_plan" | "checklist" | "markdown" =
     "detailed_plan";
   const msg = state.currentMessage ?? "";
+  const lastAssistantMessage = [...(state.conversationHistory ?? [])]
+    .reverse()
+    .find((item) => item.role === "agent")?.content ?? "";
+  const isAnsweringChecklistOffer =
+    /旅行必备清单|行前清单/.test(lastAssistantMessage)
+    && /^(需要|要|可以|好|好的|来一份|生成|帮我生成|做一份|要的|需要的)$/.test(msg.trim());
   if (/朋友|简洁|分享给别人/.test(msg)) format = "friend_summary";
-  if (/清单|checklist|准备|行李/.test(msg)) format = "checklist";
+  if (/清单|checklist|准备|行李/.test(msg) || isAnsweringChecklistOffer) format = "checklist";
   if (/markdown|md|notion/.test(msg)) format = "markdown";
 
   const title =
     state.trip?.title || state.trip?.destination || "旅行行程";
 
   let content = "";
+  const checklistItems: AgentExportPayload["checklistItems"] = format === "checklist"
+    ? [
+        { categoryId: "todo", label: "确认往返交通票据和出发到达时间" },
+        { categoryId: "todo", label: "确认酒店/民宿订单和入住方式" },
+        { categoryId: "todo", label: "预约或购买重点景点门票" },
+        { categoryId: "todo", label: "查看目的地天气并调整穿搭" },
+        { categoryId: "todo", label: "收藏行程路线，提前下载离线地图" },
+        { categoryId: "documents", label: "身份证/护照等有效证件" },
+        { categoryId: "documents", label: "学生证、老年证等优惠证件" },
+        { categoryId: "documents", label: "酒店、交通、门票订单截图或电子凭证" },
+        { categoryId: "documents", label: "少量现金和常用银行卡" },
+        { categoryId: "clothing", label: "舒适好走的鞋" },
+        { categoryId: "clothing", label: "换洗衣物和睡衣" },
+        { categoryId: "clothing", label: "外套、防晒衣或雨具" },
+        { categoryId: "clothing", label: "常用药品、纸巾和个人洗护用品" },
+        { categoryId: "electronics", label: "手机和充电器" },
+        { categoryId: "electronics", label: "充电宝和数据线" },
+        { categoryId: "electronics", label: "耳机、相机或拍摄设备" },
+      ]
+    : undefined;
+
+  if (format === "checklist") {
+    for (const day of draft.days) {
+      for (const activity of day.activities) {
+        if (activity.notes?.includes("预约") || activity.notes?.includes("票")) {
+          checklistItems?.push({
+            categoryId: "todo",
+            label: `${activity.customName ?? "行程活动"}：${activity.notes}`,
+          });
+        }
+      }
+    }
+  }
+
   switch (format) {
     case "friend_summary": {
       content = `## ${title} 简要行程\n\n`;
@@ -2352,17 +3088,20 @@ export async function exportItineraryNode(
       break;
     }
     case "checklist": {
-      content = `## ${title} 行前清单\n\n### 预约/购票\n`;
-      for (const day of draft.days) {
-        for (const a of day.activities) {
-          if (a.notes?.includes("预约") || a.notes?.includes("票")) {
-            content += `- [ ] ${a.customName} — ${a.notes}\n`;
-          }
+      const categoryTitles = {
+        todo: "待办事项",
+        documents: "重要证件",
+        clothing: "衣物穿搭",
+        electronics: "数码电子",
+      };
+      content = `## ${title} 旅行必备清单\n\n`;
+      for (const categoryId of ["todo", "documents", "clothing", "electronics"] as const) {
+        const categoryItems = checklistItems?.filter((item) => item.categoryId === categoryId) ?? [];
+        content += `### ${categoryTitles[categoryId]}\n`;
+        for (const item of categoryItems) {
+          content += `- [ ] ${item.label}\n`;
         }
-      }
-      content += `\n### 每日准备\n`;
-      for (const day of draft.days) {
-        content += `- [ ] Day ${day.dayIndex}: ${day.activities.length}个活动\n`;
+        content += "\n";
       }
       break;
     }
@@ -2385,8 +3124,16 @@ export async function exportItineraryNode(
   }
 
   return {
-    responsePayload: { format, content, title },
-    assistantMessage: `已导出为 ${format === "friend_summary" ? "简洁版" : format === "checklist" ? "行前清单" : "详细行程"}`,
+    responsePayload: {
+      format,
+      content,
+      title,
+      tripId: state.tripId ?? state.trip?.id,
+      checklistItems,
+    },
+    assistantMessage: format === "checklist"
+      ? "已生成旅行必备清单，并写入到对应行程详情页的“旅行清单”里。"
+      : `已导出为 ${format === "friend_summary" ? "简洁版" : "详细行程"}`,
     actionLog: [
       logAction(state, "export_itinerary", `format=${format}`, Date.now() - t0),
     ],
@@ -2407,7 +3154,7 @@ export async function parseTripNode(
     .join("\n");
 
   if (!msg || msg.trim().length < 1) {
-    return { missingInfo: ["destination", "dates"], assistantMessage: "请告诉我你正在路上哪里旅行，计划几天？" };
+    return { missingInfo: ["origin", "destination", "dates"], assistantMessage: "请告诉我从哪里出发、要去哪里旅行、计划几天？" };
   }
 
   try {
@@ -2415,7 +3162,7 @@ export async function parseTripNode(
 
     // Build an explicit prompt that separates "already known" from "new message"
     const existingStr = existing?.destination
-      ? `\n\n【已提取的信息（来自之前的对话）】\n- 目的地：${existing.destination ?? "未知"}\n- 日期：${existing.startDate ?? "?"} 至 ${existing.endDate ?? "?"}\n- 天数：${existing.dayCount ?? "?"}\n- 人数：${existing.travelers?.adults ?? "?"}成人${existing.travelers?.children ? ` +${existing.travelers.children}儿童` : ""}\n- 预算：${existing.budget ? `¥${existing.budget.min}-${existing.budget.max}` : "?"}\n- 偏好：${existing.preferences?.join("、") ?? "?"}\n\n请根据用户最新消息更新/补完以上信息，不要丢失已有字段。`
+      ? `\n\n【已提取的信息（来自之前的对话）】\n- 出发地：${existing.origin ?? "未知"}\n- 目的地：${existing.destination ?? "未知"}\n- 日期：${existing.startDate ?? "?"} 至 ${existing.endDate ?? "?"}\n- 天数：${existing.dayCount ?? "?"}\n- 人数：${existing.travelers?.adults ?? "?"}成人${existing.travelers?.children ? ` +${existing.travelers.children}儿童` : ""}\n- 预算：${existing.budget ? `¥${existing.budget.min}-${existing.budget.max}` : "?"}\n- 偏好：${existing.preferences?.join("、") ?? "?"}\n\n请根据用户最新消息更新/补完以上信息，不要丢失已有字段。`
       : "";
 
     const prompt = PARSE_TRIP_PROMPT
@@ -2436,6 +3183,7 @@ export async function parseTripNode(
     );
 
     const v = validateWithSchema(ParseTripResultSchema, parsed, "parse_trip");
+    const transportRequest = parseTransportRequest(buildConversationContext(state));
     const travelersFromLatestMessage = hasExplicitTravelerCount(msg);
     const nextTravelers = travelersFromLatestMessage
       ? v.travelers || existing?.travelers
@@ -2444,9 +3192,10 @@ export async function parseTripNode(
 
     // Merge with existing requirements (latest values win)
     const merged = {
-      destination: v.destination || existing?.destination,
-      startDate: v.startDate || existing?.startDate,
-      endDate: v.endDate || existing?.endDate,
+      origin: v.origin || transportRequest?.origin || existing?.origin,
+      destination: v.destination || transportRequest?.destination || existing?.destination,
+      startDate: v.startDate || (transportRequest?.departDate ? normalizeTransportDate(transportRequest.departDate) : undefined) || existing?.startDate,
+      endDate: v.endDate || (transportRequest?.returnDate ? normalizeTransportDate(transportRequest.returnDate) : undefined) || existing?.endDate,
       dayCount: v.dayCount ?? existing?.dayCount,
       travelers: nextTravelers,
       budget: budgetFromLatestMessage ?? normalizeParsedBudget(v.budget, existing?.budget),
@@ -2454,6 +3203,7 @@ export async function parseTripNode(
     };
 
     const missing = v.missingInfo ?? [];
+    if (!merged.origin) missing.push("origin");
     if (!merged.destination) missing.push("destination");
     if (!merged.startDate && !merged.dayCount) {
       if (!missing.includes("dates")) missing.push("dates");
@@ -2473,13 +3223,13 @@ export async function parseTripNode(
       parsedTripRequirements: merged,
       missingInfo: [...new Set(missing)],
       assistantMessage: "",
-      actionLog: [logAction(state, "parse_trip", `dest=${merged.destination}, missing=${missing.join(",")}`, Date.now() - t0)],
+      actionLog: [logAction(state, "parse_trip", `route=${merged.origin ?? "?"}->${merged.destination ?? "?"}, missing=${missing.join(",")}`, Date.now() - t0)],
     };
   } catch (err) {
     return {
       errors: [...(state.errors ?? []), `parse_trip: ${(err as Error).message}`],
-      missingInfo: ["destination", "dates"],
-      assistantMessage: "抱歉，没能提取到信息。请直接告诉我目的地、日期、天数。",
+      missingInfo: ["origin", "destination", "dates"],
+      assistantMessage: "抱歉，没能提取到信息。请直接告诉我出发地、目的地、日期或天数。",
     };
   }
 }
@@ -2495,6 +3245,7 @@ export async function collectMissingInfoNode(
 
   // Filter out fields that are already satisfied
   const reallyMissing = missing.filter((m) => {
+    if (m === "origin" && parsed?.origin) return false;
     if ((m === "dates" || m === "startDate") && parsed?.dayCount) return false;
     if ((m === "travelers" || m === "adults") && parsed?.travelers?.adults) return false;
     if (m === "budget" && parsed?.budget) return false;
@@ -2504,14 +3255,15 @@ export async function collectMissingInfoNode(
     return true;
   });
 
-  // Required fields: destination, dayCount/dates, preferences
+  // Required fields: origin, destination, dayCount/dates, preferences
   // Optional fields: travelers, budget (don't block flow)
   const essentialMissing = reallyMissing.filter((m) =>
-    m === "destination" || m === "dates" || m === "startDate" || m === "dayCount" || m === "preferences"
+    m === "origin" || m === "destination" || m === "dates" || m === "startDate" || m === "dayCount" || m === "preferences"
   );
 
   // If dayCount is known but dates/startDate is missing, it's not essential
-  const hasEssential = parsed?.destination
+  const hasEssential = parsed?.origin
+    && parsed?.destination
     && (parsed?.dayCount || (parsed?.startDate && parsed?.endDate))
     && parsed?.preferences?.length
     && essentialMissing.filter(m => m !== "dates" || !parsed?.dayCount).length === 0;
@@ -2520,21 +3272,30 @@ export async function collectMissingInfoNode(
   const isEditRequest = /^修改信息$|^继续修改$/.test(state.currentMessage ?? "");
   const isFormSubmit = /^(补充信息|确认信息)[:：]/.test(state.currentMessage ?? "");
   const questionLabels: Record<string, string> = {
-    destination: "正在路上哪个城市或国家？",
+    origin: "从哪里出发？",
+    destination: "想去哪里？",
+    startDate: "什么时候出发？",
+    endDate: "什么时候返回？",
     dayCount: "计划玩几天？",
     travelers: "几个人一起去？",
     preferences: "有什么旅行偏好？",
     budget: "预算大概多少？",
   };
   const optionSets: Record<string, string[]> = {
+    origin: ["北京", "上海", "广州"],
     destination: ["北京", "上海", "成都"],
+    startDate: [],
+    endDate: [],
     dayCount: ["3天", "5天", "7天"],
     travelers: ["1人", "2人", "一家人"],
     preferences: ["美食探索", "自然风光", "历史文化"],
     budget: ["¥3000以下", "¥3000-8000", "¥8000以上"],
   };
   const currentValue = (field: string) => {
+    if (field === "origin") return parsed?.origin ?? "";
     if (field === "destination") return parsed?.destination ?? "";
+    if (field === "startDate") return parsed?.startDate ?? "";
+    if (field === "endDate") return parsed?.endDate ?? "";
     if (field === "dayCount") return parsed?.dayCount ? `${parsed.dayCount}天` : "";
     if (field === "travelers") {
       const adults = parsed?.travelers?.adults;
@@ -2544,8 +3305,10 @@ export async function collectMissingInfoNode(
     }
     if (field === "preferences") return parsed?.preferences?.join("、") ?? "";
     if (field === "budget") {
-      if (parsed?.budget?.min && parsed?.budget?.max) return `¥${parsed.budget.min}-${parsed.budget.max}`;
-      if (parsed?.budget?.min) return `¥${parsed.budget.min}以上`;
+      if (typeof parsed?.budget?.min === "number" && typeof parsed?.budget?.max === "number") {
+        return parsed.budget.min <= 0 ? `¥${parsed.budget.max}以下` : `¥${parsed.budget.min}-${parsed.budget.max}`;
+      }
+      if (typeof parsed?.budget?.min === "number") return `¥${parsed.budget.min}以上`;
       return "";
     }
     return "";
@@ -2559,42 +3322,16 @@ export async function collectMissingInfoNode(
   }));
 
   if (hasEssential && !isEditRequest && isFormSubmit) {
-    // All required info gathered — show detailed confirmation card
-    const dest = parsed?.destination || "";
-    const dayCount = parsed?.dayCount ?? 0;
-    const startDate = parsed?.startDate || new Date().toISOString().slice(0, 10);
-    const endDate = parsed?.endDate ||
-      new Date(new Date(startDate).getTime() + (dayCount - 1) * 86400000)
-        .toISOString().slice(0, 10);
-    const adults = parsed?.travelers?.adults ?? 1;
-    const children = parsed?.travelers?.children ?? 0;
-    const travelersStr = `${adults}成人${children ? ` +${children}儿童` : ""}`;
-    const prefsStr = parsed?.preferences?.length ? parsed.preferences.join("、") : "无";
-    const budgetStr = formatBudget(parsed?.budget);
-
     return {
       missingInfo: [...reallyMissing],
-      responsePayload: {
-        type: "question_card",
-        confirmMode: true,
-        summary: `${dest} · ${dayCount}天`,
-        tripInfo: {
-          destination: dest,
-          startDate,
-          endDate,
-          dayCount,
-          travelers: travelersStr,
-          budget: budgetStr,
-          preferences: prefsStr,
-        },
-      },
       assistantMessage: "",
-      actionLog: [logAction(state, "collect_missing_info", "showing confirm card", Date.now() - t0)],
+      responsePayload: undefined,
+      actionLog: [logAction(state, "collect_missing_info", "form submitted, continue planning", Date.now() - t0)],
     };
   }
 
-  // Priority order: destination → dayCount → travelers → preferences → budget
-  const priorityOrder = ["destination", "dayCount", "travelers", "preferences", "budget"];
+  // Priority order: origin → destination → dayCount → travelers → preferences → budget
+  const priorityOrder = ["origin", "destination", "dayCount", "travelers", "preferences", "budget"];
   const normalized = new Set<string>();
   for (const m of reallyMissing) {
     if (m === "startDate" || m === "endDate" || m === "dayCount" || m === "dates") {
@@ -2603,6 +3340,8 @@ export async function collectMissingInfoNode(
       if (!parsed?.travelers?.adults) normalized.add("travelers");
     } else if (m === "budgetMin" || m === "budgetMax" || m === "budget") {
       if (!parsed?.budget) normalized.add("budget");
+    } else if (m === "origin") {
+      if (!parsed?.origin) normalized.add("origin");
     } else if (m === "destination") {
       if (!parsed?.destination) normalized.add("destination");
     } else if (m === "preferences") {
@@ -2618,21 +3357,23 @@ export async function collectMissingInfoNode(
     return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
   });
 
-  if (sorted.length === 0 && !isEditRequest) {
-    return { missingInfo: [...reallyMissing], assistantMessage: "" };
-  }
+  const questionCardFields = [
+    "origin",
+    "destination",
+    "startDate",
+    "endDate",
+    "dayCount",
+    "travelers",
+    "preferences",
+    "budget",
+  ];
 
-  // If user clicked "修改信息", show ALL fields for editing (not just missing)
-  const fieldsToShow = isEditRequest
-    ? ["destination", "dayCount", "travelers", "preferences", "budget"]
-    : sorted;
-
-  const formItems = buildFormItems(fieldsToShow, isEditRequest);
+  const formItems = buildFormItems(questionCardFields, true);
 
   const summary = isEditRequest
     ? "请修改以下信息"
     : parsed?.destination
-      ? `已识别：${parsed.destination}${parsed.dayCount ? ` · ${parsed.dayCount}天` : ""}${parsed.travelers?.adults ? ` · ${parsed.travelers.adults}人` : ""}${parsed.preferences?.length ? ` · ${parsed.preferences.join("、")}` : ""}。请补充缺失信息。`
+      ? `已识别：${parsed.origin ? `${parsed.origin} → ` : ""}${parsed.destination}${parsed.dayCount ? ` · ${parsed.dayCount}天` : ""}${parsed.travelers?.adults ? ` · ${parsed.travelers.adults}人` : ""}${parsed.preferences?.length ? ` · ${parsed.preferences.join("、")}` : ""}。请补充缺失信息。`
       : "";
 
   return {
@@ -2802,6 +3543,9 @@ export async function createTripNode(
       msg += `，包含 ${draft.days.length} 天行程，${draft.days.reduce((sum, d) => sum + (d.activities?.length ?? 0), 0)} 个活动`;
     }
     msg += "。点击下方卡片查看详情 →";
+    if (draft?.days?.length) {
+      msg = appendChecklistOffer(msg);
+    }
 
     return {
       tripId,

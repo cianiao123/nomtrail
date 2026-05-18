@@ -9,6 +9,7 @@ import { createClient } from "@supabase/supabase-js";
 import { travelAgentGraph } from "@/lib/agent/graph";
 import { createInitialAgentState } from "@/lib/agent/sessionContext";
 import { formatAgentNodeName } from "@/lib/agent/agents/registry";
+import { parseWeatherQuery } from "@/lib/agent/weatherIntent";
 import { SERVER_ANONYMOUS_USER_ID } from "@/lib/auth/guestUser";
 import type { TravelAgentState } from "@/lib/agent/state";
 import type { AgentRunRequest, AgentRunSSEEvent } from "@/types/agent";
@@ -18,6 +19,45 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
 const AGENT_ROUTE_BUDGET_MS = (maxDuration - 8) * 1000;
+type ProgressEvent = { node: string; message: string };
+
+function isLightweightRecommendationMessage(message: string) {
+  const text = message.trim();
+  if (!text) return false;
+  const localRecommendationPatterns =
+    /(?:有什么|有啥|哪里|哪儿).*(?:好玩|好吃|逛|推荐|景点|玩法)|(?:好玩|好吃|景点|玩法|攻略).*推荐|(?:怎么玩|怎么逛|玩什么|可以玩什么|游玩攻略|值得玩)/u;
+  const durationAdvicePatterns =
+    /(?:适合|建议|推荐|一般|通常|大概|最好)?.{0,12}(?:玩|游玩|旅行|旅游|安排|待|待上|留).{0,8}(?:几天|多少天|几晚|多久).{0,12}(?:合适|比较好|够|够不够)?|(?:几天|多少天|几晚|多久).{0,12}(?:合适|比较好|够|够不够)/u;
+  const fullTripPatterns =
+    /\d+\s*(?:天|晚)|预算|人均|\d+\s*人|出发|返回|往返|行程|路线|规划|安排|自由行|亲子|蜜月/u;
+  return (localRecommendationPatterns.test(text) || durationAdvicePatterns.test(text)) && !fullTripPatterns.test(text);
+}
+
+function buildProgressEvents(message: string): ProgressEvent[] {
+  if (parseWeatherQuery(message)) {
+    return [
+      { node: formatAgentNodeName("load_context"), message: "正在识别天气问题" },
+      { node: formatAgentNodeName("general_chat"), message: "正在查询目的地天气" },
+    ];
+  }
+
+  if (isLightweightRecommendationMessage(message)) {
+    return [
+      { node: formatAgentNodeName("load_context"), message: "正在理解你想找的地点" },
+      { node: formatAgentNodeName("recommend_destinations"), message: "正在整理好玩的地方" },
+    ];
+  }
+
+  return [
+    { node: formatAgentNodeName("load_context"), message: "正在读取你的旅行需求" },
+    { node: formatAgentNodeName("parse_trip"), message: "正在确认目的地、天数、人数和预算" },
+    { node: formatAgentNodeName("plan_transport"), message: "正在规划往返交通方案" },
+    { node: formatAgentNodeName("research_inspiration"), message: "正在搜索攻略与种草内容" },
+    { node: formatAgentNodeName("extract_places"), message: "正在把攻略整理成候选地点池" },
+    { node: formatAgentNodeName("critique_itinerary"), message: "正在按预算区间校准活动费用" },
+    { node: formatAgentNodeName("generate_itinerary"), message: "正在生成每日行程安排" },
+  ];
+}
 
 function getSupabase() {
   return createClient(
@@ -109,14 +149,7 @@ export async function POST(req: NextRequest) {
           requestDeadlineAt,
         });
 
-        const progressEvents: Array<{ node: string; message: string }> = [
-          { node: formatAgentNodeName("load_context"), message: "正在读取你的旅行需求" },
-          { node: formatAgentNodeName("parse_trip"), message: "正在确认目的地、天数、人数和预算" },
-          { node: formatAgentNodeName("research_inspiration"), message: "正在搜索攻略与种草内容" },
-          { node: formatAgentNodeName("extract_places"), message: "正在把攻略整理成候选地点池" },
-          { node: formatAgentNodeName("critique_itinerary"), message: "正在按预算区间校准活动费用" },
-          { node: formatAgentNodeName("generate_itinerary"), message: "正在生成每日行程安排" },
-        ];
+        const progressEvents = buildProgressEvents(message);
         let progressIndex = 0;
         emit({ type: "step", ...progressEvents[progressIndex] });
         progressTimer = setInterval(() => {
@@ -141,6 +174,9 @@ export async function POST(req: NextRequest) {
             message: result.pendingMessage ?? "请确认",
             data: {
               parsedPlaces: result.parsedPlaces,
+              transportPlan: result.transportPlan,
+              inspirationItems: result.inspirationItems,
+              savedPlaceCandidates: result.savedPlaceCandidates,
               confirmationType: result.pendingConfirmationType,
             },
           });
@@ -155,6 +191,9 @@ export async function POST(req: NextRequest) {
         if ((result.responsePayload as Record<string,unknown>)?.type === "destination_recommendation_card") {
           emit({ type: "chunk", data: { destinationRecommendationCard: result.responsePayload } });
         }
+        if ((result.responsePayload as Record<string,unknown>)?.type === "place_guide_card") {
+          emit({ type: "chunk", data: { placeGuideCard: result.responsePayload } });
+        }
         if (result.parsedPlaces?.length) {
           emit({ type: "chunk", data: { parsedPlaces: result.parsedPlaces }, message: `Parsed ${result.parsedPlaces.length} places` });
         }
@@ -167,6 +206,9 @@ export async function POST(req: NextRequest) {
             },
             message: "正在提炼地点",
           });
+        }
+        if (result.transportPlan) {
+          emit({ type: "chunk", data: { transportPlan: result.transportPlan }, message: "交通方案已生成" });
         }
         if (result.itineraryDraft) {
           emit({ type: "chunk", data: { itineraryDraft: result.itineraryDraft }, message: "Itinerary generated" });
@@ -193,6 +235,7 @@ export async function POST(req: NextRequest) {
             intent: result.intent,
             parsedPlaces: result.parsedPlaces,
             confirmedPlaces: result.confirmedPlaces,
+            transportPlan: result.transportPlan,
             inspirationItems: result.inspirationItems,
             savedPlaceCandidates: result.savedPlaceCandidates,
             itineraryDraft: result.itineraryDraft,
@@ -205,6 +248,10 @@ export async function POST(req: NextRequest) {
             questionCard: (result.responsePayload as Record<string,unknown>)?.type === "question_card" ? result.responsePayload : null,
             destinationRecommendationCard:
               (result.responsePayload as Record<string,unknown>)?.type === "destination_recommendation_card"
+                ? result.responsePayload
+                : null,
+            placeGuideCard:
+              (result.responsePayload as Record<string,unknown>)?.type === "place_guide_card"
                 ? result.responsePayload
                 : null,
             exportPayload: (result.responsePayload as Record<string,unknown>)?.content ? result.responsePayload : null,

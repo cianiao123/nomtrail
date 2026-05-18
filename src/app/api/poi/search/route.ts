@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { buildAmapPoiSearchParams } from "@/lib/poi/amapSearch";
 import { parsePoiLimit } from "@/lib/poi/searchLimit";
 
 const AMAP_WEB_KEY = process.env.NEXT_PUBLIC_AMAP_WEB_KEY || process.env.NEXT_PUBLIC_AMAP_KEY || "";
@@ -7,11 +8,27 @@ const AMAP_PAGE_SIZE = 25;
 
 export const dynamic = "force-dynamic";
 
+type AMapPoi = {
+  id?: string;
+  name?: string;
+  address?: string;
+  location?: string;
+  typecode?: string;
+};
+
+type AMapPoiResponse = {
+  status?: string;
+  info?: string;
+  count?: string;
+  pois?: AMapPoi[];
+};
+
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const keyword = searchParams.get("keyword") || "";
   const city = searchParams.get("city") || "";
   const types = searchParams.get("types") || "";
+  const strictCity = searchParams.get("strictCity") === "true";
   const limit = parsePoiLimit(searchParams.get("limit"));
 
   if (!keyword) {
@@ -28,23 +45,22 @@ export async function GET(req: NextRequest) {
 
   try {
     const searchPage = async (cityKeyword: string, page: number, offset: number) => {
-      const params = new URLSearchParams({
+      const params = buildAmapPoiSearchParams({
         key: AMAP_WEB_KEY,
         keywords: keyword,
         city: cityKeyword,
-        offset: String(offset),
-        page: String(page),
-        extensions: "all",
+        offset,
+        page,
+        types,
       });
-      if (types) params.set("types", types);
       const res = await fetch(`${AMAP_POI_URL}?${params}`, { cache: "no-store" });
-      return res.json();
+      return res.json() as Promise<AMapPoiResponse>;
     };
 
     const searchMany = async (cityKeyword: string) => {
-      const collected: any[] = [];
+      const collected: AMapPoi[] = [];
       let count = 0;
-      let lastData: any = null;
+      let lastData: AMapPoiResponse | null = null;
       const pageCount = Math.ceil(limit / AMAP_PAGE_SIZE);
       const offset = Math.min(AMAP_PAGE_SIZE, limit);
 
@@ -65,7 +81,7 @@ export async function GET(req: NextRequest) {
 
     let result = await searchMany(city);
     const noResults = result.data.status === "1" && result.pois.length === 0;
-    if (city && noResults) {
+    if (city && noResults && !strictCity) {
       result = await searchMany("");
     }
 
@@ -76,7 +92,7 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    const pois = result.pois.map((poi: any, i: number) => ({
+    const pois = result.pois.map((poi, i) => ({
       amapId: poi.id || `poi-${i}`,
       name: poi.name,
       address: poi.address || "",

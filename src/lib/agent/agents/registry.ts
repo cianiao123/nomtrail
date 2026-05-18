@@ -5,6 +5,7 @@ export type SpecialistAgentId =
   | "scenic_research_agent"
   | "food_research_agent"
   | "stay_research_agent"
+  | "transport_agent"
   | "geo_resolver_agent"
   | "planner_agent"
   | "validator_agent"
@@ -48,6 +49,11 @@ export const SPECIALIST_AGENTS: Record<SpecialistAgentId, SpecialistAgentProfile
     id: "stay_research_agent",
     label: "Stay Research",
     responsibility: "Research lodging areas, business districts, transport convenience, and base neighborhoods.",
+  },
+  transport_agent: {
+    id: "transport_agent",
+    label: "Transport",
+    responsibility: "Plan cross-city outbound and return transport options for trip timing and budget.",
   },
   geo_resolver_agent: {
     id: "geo_resolver_agent",
@@ -99,6 +105,7 @@ const NODE_AGENT_MAP: Record<string, SpecialistAgentId> = {
   extract_places: "research_agent",
   dedupe_candidates: "research_agent",
   poi_enrich: "geo_resolver_agent",
+  plan_transport: "transport_agent",
   generate_itinerary: "planner_agent",
   revise_itinerary: "planner_agent",
   normalize_activities: "validator_agent",

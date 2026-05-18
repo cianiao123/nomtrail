@@ -40,6 +40,7 @@ export const ParsePlacesResultSchema = z.object({
 
 // === Trip Requirements Parsing ===
 export const ParseTripResultSchema = z.object({
+  origin: z.string().min(1).nullable().optional(),
   destination: z.string().min(1).nullable(),
   destinationCoord: z
     .object({ lat: z.number(), lng: z.number() })
@@ -78,35 +79,49 @@ const ActivityTypeSchema = z.preprocess((value) => {
   return normalized;
 }, z.enum(["attraction", "food", "restaurant", "hotel", "transport", "other"]));
 
+const OptionalStringSchema: z.ZodType<string | undefined, z.ZodTypeDef, string | null | undefined> = z.string()
+  .optional()
+  .nullable()
+  .transform((value) => value ?? undefined);
+const OptionalNonNegativeNumberSchema: z.ZodType<number | undefined, z.ZodTypeDef, number | null | undefined> = z.number()
+  .min(0)
+  .optional()
+  .nullable()
+  .transform((value) => value ?? undefined);
+const OptionalBooleanSchema: z.ZodType<boolean | undefined, z.ZodTypeDef, boolean | null | undefined> = z.boolean()
+  .optional()
+  .nullable()
+  .transform((value) => value ?? undefined);
+
 export const ActivityDraftSchema = z.object({
   order: z.number(),
   type: ActivityTypeSchema,
   name: z.string().min(1),
-  startTime: z.string().optional(),
-  endTime: z.string().optional(),
-  durationMinutes: z.number().min(0).optional(),
-  estimatedCost: z.number().min(0).optional(),
-  notes: z.string().optional(),
-  sourceReason: z.string().optional(),
-  bookingRequired: z.boolean().optional(),
-  openingHours: z.string().optional(),
-  recommendedDuration: z.number().min(0).optional(),
-  weatherFit: z.string().optional(),
+  startTime: OptionalStringSchema,
+  endTime: OptionalStringSchema,
+  durationMinutes: OptionalNonNegativeNumberSchema,
+  estimatedCost: OptionalNonNegativeNumberSchema,
+  notes: OptionalStringSchema,
+  sourceReason: OptionalStringSchema,
+  bookingRequired: OptionalBooleanSchema,
+  openingHours: OptionalStringSchema,
+  recommendedDuration: OptionalNonNegativeNumberSchema,
+  weatherFit: OptionalStringSchema,
   ticketReference: z.string().nullable().optional(),
-  travelMinutesFromPrev: z.number().min(0).optional(),
+  travelMinutesFromPrev: OptionalNonNegativeNumberSchema,
 });
 
 export const DayDraftSchema = z.object({
   dayIndex: z.number(),
   date: z.string(),
-  theme: z.string().optional(),
+  theme: OptionalStringSchema,
   activities: z.array(ActivityDraftSchema),
-  notes: z.string().optional(),
+  notes: OptionalStringSchema,
 });
 
 export const GenerateItineraryResultSchema = z.object({
   days: z.array(DayDraftSchema),
-  overallTips: z.string().optional(),
+  overallTips: OptionalStringSchema,
   budgetSummary: z.record(z.string(), z.number()).optional(),
 });
 
@@ -186,6 +201,22 @@ export const RecommendDestinationsResultSchema = z.object({
   recommendations: z.array(DestinationRecommendationSchema).min(3).max(5),
 });
 
+export const PlaceGuideResultSchema = z.object({
+  placeName: z.string().min(1),
+  title: z.string().min(1),
+  intro: z.string().min(1),
+  bestTime: z.string().optional(),
+  tips: z.array(z.string()).min(2).max(5),
+  spots: z.array(z.object({
+    name: z.string().min(1),
+    imageKeyword: z.string().min(1),
+    highlight: z.string().min(1),
+    description: z.string().min(1),
+    duration: z.string().min(1),
+    suitableFor: z.string().min(1),
+  })).min(3).max(6),
+});
+
 // === Revision ===
 export const ReviseItineraryResultSchema = z.object({
   days: z.array(DayDraftSchema),
@@ -236,11 +267,11 @@ export const ExportResultSchema = z.object({
  * Validate and return parsed result, with retry handling.
  * Returns the parsed result, or throws if validation fails.
  */
-export function validateWithSchema<T>(
-  schema: z.ZodSchema<T>,
+export function validateWithSchema<T extends z.ZodTypeAny>(
+  schema: T,
   data: unknown,
   context: string
-): T {
+): z.output<T> {
   const result = schema.safeParse(data);
   if (!result.success) {
     const issues = result.error.issues

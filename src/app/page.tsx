@@ -1,11 +1,5 @@
-import { HeroSection } from "@/components/home/HeroSection";
-import { TrendingDestinations } from "@/components/home/TrendingDestinations";
+import { MindtripWorkspace } from "@/components/home/MindtripWorkspace";
 
 export default function HomePage() {
-  return (
-    <>
-      <HeroSection />
-      <TrendingDestinations />
-    </>
-  );
+  return <MindtripWorkspace />;
 }

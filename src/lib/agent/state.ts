@@ -13,6 +13,7 @@ import type {
   AgentActionLogEntry,
   InspirationItem,
   SavedPlaceCandidate,
+  TransportPlan,
 } from "@/types/agent";
 import type { Trip, Day } from "@/types/trip";
 
@@ -36,6 +37,7 @@ export const TravelAgentAnnotation = Annotation.Root({
 
   // === Parsed Trip Requirements ===
   parsedTripRequirements: Annotation<{
+    origin?: string;
     destination?: string;
     destinationCoord?: { lat: number; lng: number };
     startDate?: string;
@@ -53,6 +55,11 @@ export const TravelAgentAnnotation = Annotation.Root({
   inspirationItems: Annotation<InspirationItem[]>(),
   savedPlaceCandidates: Annotation<SavedPlaceCandidate[]>(),
   selectedSavedPlaces: Annotation<SavedPlaceCandidate[]>(),
+  candidatePoolConfirmed: Annotation<boolean>(),
+
+  // === Transport ===
+  transportPlan: Annotation<TransportPlan | null>(),
+  transportConfirmed: Annotation<boolean>(),
 
   // === Itinerary ===
   itineraryDraft: Annotation<{
@@ -64,7 +71,7 @@ export const TravelAgentAnnotation = Annotation.Root({
 
   // === Human-in-the-Loop ===
   needsHumanConfirmation: Annotation<boolean>(),
-  pendingConfirmationType: Annotation<"places" | "missing_info" | undefined>(),
+  pendingConfirmationType: Annotation<"places" | "missing_info" | "transport" | "candidates" | undefined>(),
   pendingMessage: Annotation<string>(),
 
   // === Versioning ===

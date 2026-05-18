@@ -27,7 +27,7 @@ export function MessageContent({ text }: { text: string }) {
     // ### Heading
     if (trimmed.startsWith("### ")) {
       elements.push(
-        <div key={i} className="font-medium text-xs text-slate-700 dark:text-slate-300 mt-2 mb-0.5">
+        <div key={i} className="font-semibold text-sm text-slate-700 dark:text-slate-300 mt-2 mb-1">
           {renderInline(trimmed.slice(4))}
         </div>
       );
@@ -37,7 +37,7 @@ export function MessageContent({ text }: { text: string }) {
     // ## Heading
     if (trimmed.startsWith("## ")) {
       elements.push(
-        <div key={i} className="font-semibold text-sm text-slate-800 dark:text-slate-200 mt-2 mb-0.5">
+        <div key={i} className="font-semibold text-base text-slate-800 dark:text-slate-200 mt-2 mb-1">
           {renderInline(trimmed.slice(3))}
         </div>
       );
@@ -47,7 +47,7 @@ export function MessageContent({ text }: { text: string }) {
     // # Heading
     if (trimmed.startsWith("# ")) {
       elements.push(
-        <div key={i} className="font-semibold text-base text-slate-900 dark:text-slate-100 mt-3 mb-1">
+        <div key={i} className="font-semibold text-lg text-slate-900 dark:text-slate-100 mt-3 mb-1.5">
           {renderInline(trimmed.slice(2))}
         </div>
       );
@@ -66,7 +66,7 @@ export function MessageContent({ text }: { text: string }) {
     if (/^[-*]\s/.test(trimmed)) {
       const listContent = trimmed.slice(2);
       elements.push(
-        <div key={i} className="flex items-start gap-1.5 text-sm leading-relaxed ml-1">
+        <div key={i} className="flex items-start gap-2 text-base leading-7 ml-1">
           <span className="text-slate-400 mt-0.5 shrink-0">•</span>
           <span className="text-slate-700 dark:text-slate-300">
             {renderInline(listContent)}
@@ -81,8 +81,8 @@ export function MessageContent({ text }: { text: string }) {
       const match = trimmed.match(/^(\d+)[.)]\s(.*)/);
       if (match) {
         elements.push(
-          <div key={i} className="flex items-start gap-1.5 text-sm leading-relaxed ml-1">
-            <span className="text-slate-400 mt-0.5 shrink-0 font-mono text-xs">{match[1]}.</span>
+          <div key={i} className="flex items-start gap-2 text-base leading-7 ml-1">
+            <span className="text-slate-400 mt-0.5 shrink-0 font-mono text-sm">{match[1]}.</span>
             <span className="text-slate-700 dark:text-slate-300">
               {renderInline(match[2])}
             </span>
@@ -94,7 +94,7 @@ export function MessageContent({ text }: { text: string }) {
 
     // Plain text line
     elements.push(
-      <div key={i} className="text-sm leading-relaxed text-slate-700 dark:text-slate-300">
+      <div key={i} className="text-base leading-7 text-slate-700 dark:text-slate-300">
         {renderInline(trimmed)}
       </div>
     );
@@ -129,7 +129,7 @@ function renderInline(text: string): React.ReactNode {
         parts.push(<span key={key++}>{codeMatch[1]}</span>);
       }
       parts.push(
-        <code key={key++} className="bg-slate-200 dark:bg-slate-700 px-1 rounded text-xs font-mono">
+        <code key={key++} className="bg-slate-200 dark:bg-slate-700 px-1 rounded text-sm font-mono">
           {codeMatch[2]}
         </code>
       );

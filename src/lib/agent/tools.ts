@@ -43,8 +43,7 @@ export const XHS_MCP_ENDPOINT =
 const isServerlessRuntime = isConstrainedServerlessRuntime();
 const XHS_SEARCH_COUNT = 3;
 const WEB_SEARCH_MAX_USES = 1;
-const POI_ENRICH_LIMIT = isServerlessRuntime ? 2 : 6;
-const CANDIDATE_POOL_LIMIT = 8;
+const CANDIDATE_POOL_LIMIT = 10;
 
 function createTimeoutSignal(timeoutMs: number): AbortSignal {
   const controller = new AbortController();
@@ -209,6 +208,7 @@ async function searchPOIRecord(
   city: string
 ): Promise<{
   name: string;
+  resolved: boolean;
   address?: string;
   coordinate?: { lat: number; lng: number };
   openingHours?: string;
@@ -220,7 +220,7 @@ async function searchPOIRecord(
     ""
   ).trim();
 
-  if (!key) return { name: keyword };
+  if (!key) return { name: keyword, resolved: false };
 
   try {
     const params = new URLSearchParams({
@@ -231,6 +231,7 @@ async function searchPOIRecord(
       page: "1",
       extensions: "all",
     });
+    if (city.trim()) params.set("citylimit", "true");
     const res = await fetch(`https://restapi.amap.com/v3/place/text?${params}`, {
       signal: createTimeoutSignal(isServerlessRuntime ? 700 : 5000),
     });
@@ -244,11 +245,12 @@ async function searchPOIRecord(
       }>;
     };
     const poi = data.status === "1" ? data.pois?.[0] : undefined;
-    if (!poi) return { name: keyword };
+    if (!poi) return { name: keyword, resolved: false };
 
     const [lng, lat] = (poi.location || "").split(",").map(Number);
     return {
       name: poi.name || keyword,
+      resolved: true,
       address: poi.address || "",
       coordinate:
         Number.isFinite(lng) && Number.isFinite(lat)
@@ -258,7 +260,7 @@ async function searchPOIRecord(
       ticketReference: poi.biz_ext?.cost || undefined,
     };
   } catch {
-    return { name: keyword };
+    return { name: keyword, resolved: false };
   }
 }
 
@@ -356,6 +358,45 @@ function buildFallbackCandidatesFromInspiration(
   return candidates;
 }
 
+const CITY_FALLBACK_CANDIDATES: Record<string, Array<Pick<SavedPlaceCandidate, "name" | "category" | "priorityTag" | "reason">>> = {
+  北京: [
+    { name: "故宫博物院", category: "attraction", priorityTag: "must_go", reason: "北京历史文化核心地标，适合作为首日或整天重点游览。" },
+    { name: "天安门广场", category: "attraction", priorityTag: "must_go", reason: "经典城市地标，可与故宫、前门串联安排。" },
+    { name: "八达岭长城", category: "attraction", priorityTag: "must_go", reason: "北京代表性世界遗产，适合安排半天到一天。" },
+    { name: "颐和园", category: "attraction", priorityTag: "must_go", reason: "皇家园林代表，适合历史文化和自然风光结合的行程。" },
+    { name: "天坛公园", category: "attraction", priorityTag: "nearby_optional", reason: "礼制建筑代表，游览节奏相对舒展。" },
+    { name: "南锣鼓巷", category: "other", priorityTag: "nearby_optional", reason: "胡同街区氛围明显，适合轻松逛吃。" },
+    { name: "国家博物馆", category: "attraction", priorityTag: "rainy_backup", reason: "室内历史文化内容丰富，适合作为雨天或高温备选。" },
+    { name: "什刹海", category: "attraction", priorityTag: "night_option", reason: "傍晚和夜间氛围好，可与胡同、餐饮结合。" },
+    { name: "雍和宫", category: "attraction", priorityTag: "nearby_optional", reason: "文化氛围浓，适合与五道营、国子监周边串联。" },
+    { name: "前门大街", category: "food", priorityTag: "food_candidate", reason: "老字号和北京风味集中，适合安排正餐或小吃。" },
+  ],
+  上海: [
+    { name: "外滩", category: "attraction", priorityTag: "must_go", reason: "上海经典城市景观，适合傍晚到夜间游览。" },
+    { name: "豫园", category: "attraction", priorityTag: "must_go", reason: "传统园林和老城厢氛围集中，适合半日游。" },
+    { name: "南京路步行街", category: "other", priorityTag: "nearby_optional", reason: "可与外滩串联，适合购物和城市漫步。" },
+    { name: "上海博物馆", category: "attraction", priorityTag: "rainy_backup", reason: "室内文化内容扎实，适合雨天或慢节奏安排。" },
+    { name: "武康路", category: "attraction", priorityTag: "nearby_optional", reason: "城市街区漫步代表，适合拍照和咖啡休息。" },
+    { name: "田子坊", category: "other", priorityTag: "nearby_optional", reason: "弄堂商业街区，适合轻松逛店。" },
+    { name: "陆家嘴", category: "attraction", priorityTag: "night_option", reason: "夜景和城市天际线集中，适合夜间安排。" },
+    { name: "新天地", category: "food", priorityTag: "food_candidate", reason: "餐饮和街区体验集中，适合晚餐时段。" },
+    { name: "上海自然博物馆", category: "attraction", priorityTag: "rainy_backup", reason: "室内展馆体验稳定，适合亲子或雨天。" },
+    { name: "朱家角古镇", category: "attraction", priorityTag: "nearby_optional", reason: "近郊古镇，适合时间充裕时安排半日到一日。" },
+  ],
+};
+
+function buildGenericFallbackCandidates(destination: string): SavedPlaceCandidate[] {
+  const templates = CITY_FALLBACK_CANDIDATES[destination] ?? [];
+
+  return templates.slice(0, CANDIDATE_POOL_LIMIT).map((candidate, index) => ({
+    ...candidate,
+    city: destination,
+    sourceRefs: ["内置真实地点"],
+    qualityScore: Math.max(0.45, 0.75 - index * 0.02),
+    reason: candidate.reason,
+  }));
+}
+
 export async function searchTravelInspiration(
   destination: string,
   preferences: string[],
@@ -404,10 +445,11 @@ export async function searchTravelInspiration(
 
   const inspirationItems = [...xhsItems, ...webItems];
   if (inspirationItems.length === 0) {
+    const fallbackCandidates = buildGenericFallbackCandidates(destination);
     return {
       inspirationItems: [],
-      savedPlaceCandidates: [],
-      debug: { xhsCount: 0, webCount: 0, enrichedCount: 0, verticals: [] },
+      savedPlaceCandidates: fallbackCandidates,
+      debug: { xhsCount: 0, webCount: 0, enrichedCount: fallbackCandidates.length, verticals: [] },
     };
   }
 
@@ -488,31 +530,32 @@ ${combineInspirationText(inspirationItems)}
       ),
     };
   }
+  if (validated.savedPlaceCandidates.length === 0) {
+    validated = {
+      ...validated,
+      savedPlaceCandidates: buildGenericFallbackCandidates(destination),
+    };
+  }
 
   const candidatePool = validated.savedPlaceCandidates.slice(0, CANDIDATE_POOL_LIMIT);
-  const enrichedCandidates = await mapConcurrent(
-    candidatePool.slice(0, POI_ENRICH_LIMIT),
+  const enrichedCandidates = (await mapConcurrent(
+    candidatePool,
     isServerlessRuntime ? 2 : 4,
-    async (candidate) => {
+    async (candidate): Promise<SavedPlaceCandidate> => {
       const poi = await searchPOIRecord(candidate.name, candidate.city || destination);
-      return {
+      const enriched: SavedPlaceCandidate = {
         ...candidate,
+        name: poi.resolved ? poi.name : candidate.name,
         category: normalizeCategory(candidate.category),
         coordinate: candidate.coordinate ?? poi.coordinate,
         address: candidate.address ?? poi.address,
         openingHours: candidate.openingHours ?? poi.openingHours,
         ticketReference: candidate.ticketReference ?? poi.ticketReference,
       };
+      return enriched;
     }
-  );
-  const enrichmentKeys = new Set(enrichedCandidates.map((candidate) => normalizeCandidateKey(candidate.name)));
-  const remainingCandidates = candidatePool
-    .filter((candidate) => !enrichmentKeys.has(normalizeCandidateKey(candidate.name)))
-    .map((candidate) => ({
-      ...candidate,
-      category: normalizeCategory(candidate.category),
-    }));
-  const savedPlaceCandidates = [...enrichedCandidates, ...remainingCandidates];
+  ));
+  const savedPlaceCandidates = enrichedCandidates.slice(0, CANDIDATE_POOL_LIMIT);
 
   return {
     inspirationItems: validated.inspirationItems,

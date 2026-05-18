@@ -12,6 +12,7 @@ import { useAgentStore } from "@/stores/agentStore";
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const isHomePage = pathname === "/";
   const isTripPage = pathname.startsWith("/trip/");
   const isExplorePage = pathname === "/explore";
   const isLoginPage = pathname === "/login";
@@ -28,12 +29,14 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <AuthClickGuard>
-      {!isTripPage && !isLoginPage && <TopNavBar />}
+      {!isHomePage && !isTripPage && !isLoginPage && <TopNavBar />}
       <div className="relative mx-auto flex w-full max-w-[1920px] flex-1">
         <main
           className={cn(
             "relative flex-1",
-            isExplorePage
+            isHomePage
+              ? "min-h-dvh pb-0"
+              : isExplorePage
               ? "h-[calc(100dvh-92px)] overflow-hidden pb-0 lg:h-[calc(100dvh-76px)]"
               : "min-h-screen pb-24 lg:pb-0"
           )}
@@ -43,7 +46,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       </div>
 
       {/* AI Agent FAB + Drawer — non-trip pages only */}
-      {!isTripPage && !isExplorePage && !isLoginPage && (
+      {!isHomePage && !isTripPage && !isExplorePage && !isLoginPage && (
         <>
           {/* FAB button */}
           <button

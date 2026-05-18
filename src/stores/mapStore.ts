@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { SavedPlaceCandidate } from '@/types/agent';
 
 interface MapState {
   center: [number, number]; // [lng, lat]
@@ -7,6 +8,7 @@ interface MapState {
   selectedDayIndex: number;
   visibleMarkers: boolean;
   visibleRoutes: boolean;
+  candidatePreviewPlaces: SavedPlaceCandidate[];
 
   setCenter: (center: [number, number]) => void;
   setZoom: (zoom: number) => void;
@@ -14,6 +16,8 @@ interface MapState {
   setSelectedDay: (dayIndex: number) => void;
   toggleMarkers: () => void;
   toggleRoutes: () => void;
+  setCandidatePreviewPlaces: (places: SavedPlaceCandidate[]) => void;
+  clearCandidatePreviewPlaces: () => void;
 }
 
 export const useMapStore = create<MapState>((set) => ({
@@ -23,6 +27,7 @@ export const useMapStore = create<MapState>((set) => ({
   selectedDayIndex: 0,
   visibleMarkers: true,
   visibleRoutes: true,
+  candidatePreviewPlaces: [],
 
   setCenter: (center) => set({ center }),
   setZoom: (zoom) => set({ zoom }),
@@ -30,4 +35,6 @@ export const useMapStore = create<MapState>((set) => ({
   setSelectedDay: (dayIndex) => set({ selectedDayIndex: dayIndex }),
   toggleMarkers: () => set((s) => ({ visibleMarkers: !s.visibleMarkers })),
   toggleRoutes: () => set((s) => ({ visibleRoutes: !s.visibleRoutes })),
+  setCandidatePreviewPlaces: (places) => set({ candidatePreviewPlaces: places }),
+  clearCandidatePreviewPlaces: () => set({ candidatePreviewPlaces: [] }),
 }));

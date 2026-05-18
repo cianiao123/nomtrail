@@ -42,6 +42,7 @@ import {
   collectMissingInfoNode,
   createTripNode,
   normalizeActivitiesNode,
+  planTransportNode,
 } from "./nodes";
 
 function routeByIntent(state: TravelAgentState): string {
@@ -58,9 +59,17 @@ function routeByIntent(state: TravelAgentState): string {
     case "generateItinerary": {
       // Full pipeline: generate → normalize → critique → save → create_trip
       const reqs = state.parsedTripRequirements;
-      if (state.confirmedPlaces?.length) return "research_inspiration";
+      if (state.confirmedPlaces?.length) {
+        if (!reqs?.origin || !reqs?.destination) return "collect_missing_info";
+        if (state.candidatePoolConfirmed) return "generate_itinerary";
+        return state.transportConfirmed ? "research_inspiration" : "plan_transport";
+      }
       if (state.parsedPlaces?.length) return "confirm_places";
-      if (state.trip || reqs?.destination) return "research_inspiration";
+      if (state.trip) return state.candidatePoolConfirmed ? "generate_itinerary" : "research_inspiration";
+      if (reqs?.origin && reqs?.destination) {
+        if (state.candidatePoolConfirmed) return "generate_itinerary";
+        return state.transportConfirmed ? "research_inspiration" : "plan_transport";
+      }
       return "collect_missing_info";
     }
     case "reviseItinerary":
@@ -87,9 +96,9 @@ function routeAfterConfirm(state: TravelAgentState): string {
   if (state.trip || state.tripId || state.itineraryDraft?.days?.length || (state.versions?.length ?? 0) > 0) {
     return "revise_itinerary";
   }
-  return state.parsedTripRequirements?.destination
-    ? "research_inspiration"
-    : END;
+  return state.parsedTripRequirements?.origin && state.parsedTripRequirements?.destination
+    ? state.transportConfirmed ? "research_inspiration" : "plan_transport"
+    : "collect_missing_info";
 }
 
 function shouldSkipPostGenerationChecks(): boolean {
@@ -102,15 +111,25 @@ function routeAfterCollectMissing(state: TravelAgentState): string {
   if ((state.responsePayload as Record<string,unknown>)?.type === "question_card") return END;
 
   const reqs = state.parsedTripRequirements;
-  const hasEnoughTripInfo = !!reqs?.destination
+  const hasEnoughTripInfo = !!reqs?.origin
+    && !!reqs?.destination
     && !!(reqs.dayCount || (reqs.startDate && reqs.endDate))
     && !!reqs.preferences?.length;
   const wantsGeneration = /直接|开始|生成|规划|安排|帮我/.test(state.currentMessage ?? "");
+  const isFormSubmit = /^(补充信息|确认信息)[:：]/.test(state.currentMessage ?? "");
 
-  if (hasEnoughTripInfo && wantsGeneration) {
-    return "research_inspiration";
+  if (hasEnoughTripInfo && (wantsGeneration || isFormSubmit)) {
+    return state.transportConfirmed ? "research_inspiration" : "plan_transport";
   }
   return END;
+}
+
+function routeAfterTransport(state: TravelAgentState): string {
+  return state.needsHumanConfirmation ? END : "research_inspiration";
+}
+
+function routeAfterResearch(state: TravelAgentState): string {
+  return state.needsHumanConfirmation ? END : "generate_itinerary";
 }
 
 function routeAfterGenerate(state: TravelAgentState): string {
@@ -132,6 +151,7 @@ export const travelAgentGraph = new StateGraph(TravelAgentAnnotation)
   .addNode("recommend_destinations", recommendDestinationsNode)
   .addNode("general_chat", generalChatNode)
   .addNode("confirm_places", confirmPlacesNode)
+  .addNode("plan_transport", planTransportNode)
   .addNode("research_inspiration", researchInspirationNode)
   .addNode("generate_itinerary", generateItineraryNode)
   .addNode("critique_itinerary", critiqueItineraryNode)
@@ -152,6 +172,7 @@ export const travelAgentGraph = new StateGraph(TravelAgentAnnotation)
     parse_places: "parse_places",
     recommend_destinations: "recommend_destinations",
     general_chat: "general_chat",
+    plan_transport: "plan_transport",
     research_inspiration: "research_inspiration",
     generate_itinerary: "generate_itinerary",
     revise_itinerary: "revise_itinerary",
@@ -170,14 +191,23 @@ export const travelAgentGraph = new StateGraph(TravelAgentAnnotation)
   // parsePlaces → confirm → (confirmed? → generate : END)
   .addEdge("parse_places", "confirm_places")
   .addConditionalEdges("confirm_places", routeAfterConfirm, {
+    plan_transport: "plan_transport",
     research_inspiration: "research_inspiration",
     revise_itinerary: "revise_itinerary",
     generate_itinerary: "generate_itinerary",
+    collect_missing_info: "collect_missing_info",
     [END]: END,
   })
 
-  // inspiration → generate → normalize → critique → save → (create trip if new)
-  .addEdge("research_inspiration", "generate_itinerary")
+  // transport checkpoint → inspiration → generate → normalize → critique → save → (create trip if new)
+  .addConditionalEdges("plan_transport", routeAfterTransport, {
+    research_inspiration: "research_inspiration",
+    [END]: END,
+  })
+  .addConditionalEdges("research_inspiration", routeAfterResearch, {
+    generate_itinerary: "generate_itinerary",
+    [END]: END,
+  })
   .addConditionalEdges("generate_itinerary", routeAfterGenerate, {
     normalize_activities: "normalize_activities",
     save_version: "save_version",
@@ -195,6 +225,7 @@ export const travelAgentGraph = new StateGraph(TravelAgentAnnotation)
   .addEdge("general_chat", END)
   .addEdge("export_itinerary", END)
   .addConditionalEdges("collect_missing_info", routeAfterCollectMissing, {
+    plan_transport: "plan_transport",
     research_inspiration: "research_inspiration",
     create_trip: "create_trip",
     generate_itinerary: "generate_itinerary",

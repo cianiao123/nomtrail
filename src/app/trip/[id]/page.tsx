@@ -9,12 +9,18 @@ import { formatDate, getDayOfWeek } from "@/lib/utils/dateFormat";
 import { cn } from "@/lib/utils/cn";
 import { createId } from "@/lib/utils/createId";
 import { Day, Activity, Trip } from "@/types/trip";
+import type { WeatherResponse } from "@/types/weather";
 import { ACTIVITY_TYPE_ICONS, ACTIVITY_TYPE_LABELS } from "@/lib/constants";
 import { AddActivityForm } from "@/components/trip/AddActivityForm";
 import { AgentPanel } from "@/components/agent/AgentPanel";
 import { VersionDiff } from "@/components/agent/VersionDiff";
 import { AgentActionLog } from "@/components/agent/AgentActionLog";
 import { useAgentStore } from "@/stores/agentStore";
+import {
+  useTripChecklistStore,
+  type ChecklistCategory,
+  type ChecklistCategoryId,
+} from "@/stores/tripChecklistStore";
 import { Modal } from "@/components/shared/Modal";
 import dynamic from "next/dynamic";
 
@@ -369,26 +375,61 @@ function DayCard({
 }
 
 /* ====== Weather Panel ====== */
-function WeatherPanel({ days }: { days: Day[] }) {
-  const daysWithWeather = normalizeDisplayDays(days).filter((d) => d.weather);
-  if (daysWithWeather.length === 0) return null;
+function WeatherPanel({ days, isLoading }: { days: Day[]; isLoading?: boolean }) {
+  const displayWeatherDays = normalizeDisplayDays(days);
+  const daysWithWeather = displayWeatherDays.filter((d) => d.weather);
 
   return (
     <div className="luxury-card rounded-[24px] p-4">
-      <h3 className="font-headline-sm text-headline-sm text-on-surface mb-3">天气预报</h3>
-      <div className="flex gap-4 overflow-x-auto pb-2">
-        {daysWithWeather.map((day) => (
-          <div key={day.id} className="flex flex-col items-center min-w-[60px]">
-            <span className="font-caption text-on-surface-variant">Day {day.dayIndex + 1}</span>
-            <Icon
-              name={day.weather!.condition.includes("雨") ? "rainy" : day.weather!.condition.includes("晴") ? "wb_sunny" : "partly_cloudy_day"}
-              className="my-1 text-[22px] text-primary"
-            />
-            <span className="font-caption font-medium">{day.weather!.tempHigh}°</span>
-            <span className="font-caption text-on-surface-variant">{day.weather!.tempLow}°</span>
-          </div>
-        ))}
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h3 className="font-headline-sm text-headline-sm text-on-surface">天气预报</h3>
+        <span className="rounded-full bg-surface-container-low px-2.5 py-1 text-[11px] font-medium text-on-surface-variant">
+          {daysWithWeather.length > 0 ? `${daysWithWeather.length} 天` : isLoading ? "更新中" : "待更新"}
+        </span>
       </div>
+
+      {daysWithWeather.length > 0 ? (
+        <div className="flex gap-4 overflow-x-auto pb-2">
+          {displayWeatherDays.map((day) => (
+            <div key={day.id} className="flex min-w-[60px] flex-col items-center">
+              <span className="font-caption text-on-surface-variant">Day {day.dayIndex + 1}</span>
+              {day.weather ? (
+                <>
+                  <Icon
+                    name={day.weather.condition.includes("雨") ? "rainy" : day.weather.condition.includes("晴") ? "wb_sunny" : "partly_cloudy_day"}
+                    className="my-1 text-[22px] text-primary"
+                  />
+                  <span className="font-caption font-medium">{day.weather.tempHigh}°</span>
+                  <span className="font-caption text-on-surface-variant">{day.weather.tempLow}°</span>
+                  <span className="mt-1 max-w-[64px] truncate text-[11px] text-on-surface-variant">{day.weather.condition}</span>
+                </>
+              ) : (
+                <>
+                  <Icon name="cloud_queue" className="my-1 text-[22px] text-on-surface-variant/45" />
+                  <span className="font-caption font-medium text-on-surface-variant">--°</span>
+                  <span className="font-caption text-on-surface-variant/70">待更新</span>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="rounded-[16px] border border-dashed border-outline-variant/70 bg-white/54 px-3 py-4">
+          <div className="flex items-center gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[14px] bg-primary-fixed/45 text-primary">
+              <Icon name={isLoading ? "sync" : "partly_cloudy_day"} className={cn("text-[20px]", isLoading && "animate-spin")} />
+            </span>
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-on-surface">
+                {isLoading ? "正在获取天气" : "暂无天气数据"}
+              </p>
+              <p className="mt-1 text-xs leading-5 text-on-surface-variant">
+                天气会用于判断雨天备选、室内活动和每天出行舒适度。
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -463,6 +504,129 @@ function AIActionBar({ onToggleAgent }: { onToggleAgent: () => void }) {
   );
 }
 
+function checklistToneClass(tone: ChecklistCategory["tone"]) {
+  const tones = {
+    blue: "from-blue-50 to-sky-50 text-blue-600",
+    violet: "from-violet-50 to-indigo-50 text-violet-600",
+    rose: "from-rose-50 to-pink-50 text-rose-600",
+    amber: "from-amber-50 to-yellow-50 text-amber-600",
+  };
+  return tones[tone];
+}
+
+function TravelChecklistView({
+  categories,
+  onToggle,
+  onAdd,
+}: {
+  categories: ChecklistCategory[];
+  onToggle: (categoryId: ChecklistCategoryId, itemId: string) => void;
+  onAdd: (categoryId: ChecklistCategoryId, label: string) => void;
+}) {
+  const [draftText, setDraftText] = useState("");
+  const [activeAddCategory, setActiveAddCategory] = useState<ChecklistCategoryId | null>(null);
+
+  const submitDraft = (categoryId: ChecklistCategoryId) => {
+    if (!draftText.trim()) return;
+    onAdd(categoryId, draftText);
+    setDraftText("");
+    setActiveAddCategory(null);
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="grid gap-6 lg:grid-cols-2">
+        {categories.map((category) => {
+          const done = category.items.filter((item) => item.checked).length;
+          const isAdding = activeAddCategory === category.id;
+          return (
+            <section
+              key={category.id}
+              className="overflow-hidden rounded-[24px] border border-outline-variant/60 bg-white shadow-[0_18px_44px_rgba(8,35,69,0.06)]"
+            >
+              <div className={cn("flex items-center justify-between bg-gradient-to-br px-5 py-4", checklistToneClass(category.tone))}>
+                <div className="flex items-center gap-3">
+                  <span className="grid h-10 w-10 place-items-center rounded-[12px] bg-white/78 shadow-sm">
+                    <Icon
+                      name={category.id === "todo" ? "edit_note" : category.id === "documents" ? "payments" : category.id === "clothing" ? "weekend" : "notifications"}
+                      className="text-[18px]"
+                    />
+                  </span>
+                  <div>
+                    <h3 className="text-base font-semibold text-on-surface">{category.title}</h3>
+                    <p className="mt-1 text-xs text-on-surface-variant">{category.subtitle}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="rounded-full bg-white/86 px-2.5 py-1 text-xs font-semibold text-on-surface-variant">
+                    {done}/{category.items.length}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveAddCategory(isAdding ? null : category.id);
+                      setDraftText("");
+                    }}
+                    className="grid h-9 w-9 place-items-center rounded-[12px] bg-white/86 text-on-surface shadow-sm transition-colors hover:bg-white"
+                    aria-label={`添加${category.title}清单项`}
+                  >
+                    <Icon name={isAdding ? "close" : "add"} className="text-[19px]" />
+                  </button>
+                </div>
+              </div>
+              <div className="space-y-1 px-5 py-5">
+                {isAdding && (
+                  <div className="mb-3 flex items-center gap-2 rounded-[14px] border border-outline-variant/60 bg-surface-container-low p-2">
+                    <input
+                      value={draftText}
+                      onChange={(event) => setDraftText(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") submitDraft(category.id);
+                        if (event.key === "Escape") {
+                          setDraftText("");
+                          setActiveAddCategory(null);
+                        }
+                      }}
+                      className="min-w-0 flex-1 bg-transparent px-2 py-1.5 text-sm text-on-surface outline-none placeholder:text-on-surface-variant/55"
+                      placeholder={`添加到${category.title}...`}
+                      autoFocus
+                    />
+                    <button
+                      type="button"
+                      onClick={() => submitDraft(category.id)}
+                      disabled={!draftText.trim()}
+                      className="grid h-9 w-9 place-items-center rounded-[10px] bg-on-surface text-white transition-opacity disabled:opacity-35"
+                      aria-label="确认添加"
+                    >
+                      <Icon name="check" className="text-[18px]" />
+                    </button>
+                  </div>
+                )}
+                {category.items.map((item) => (
+                  <label
+                    key={item.id}
+                    className="flex cursor-pointer items-center gap-3 rounded-[12px] px-2 py-2.5 transition-colors hover:bg-surface-container-low"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={item.checked}
+                      onChange={() => onToggle(category.id, item.id)}
+                      className="h-5 w-5 rounded border-outline-variant accent-primary"
+                    />
+                    <span className={cn("text-sm font-medium", item.checked ? "text-on-surface-variant line-through" : "text-on-surface")}>
+                      {item.label}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </section>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 /** Generate placeholder days from date range */
 function generatePlaceholderDays(startDate?: string, endDate?: string): Day[] {
   if (!startDate || !endDate) return [];
@@ -506,6 +670,7 @@ function TripDetailContent() {
   const [showAgentDrawer, setShowAgentDrawer] = useState(false);
   const [showVersions, setShowVersions] = useState(false);
   const [showLog, setShowLog] = useState(false);
+  const [activeTripTab, setActiveTripTab] = useState<"itinerary" | "checklist">("itinerary");
   const [showMetaEditor, setShowMetaEditor] = useState(false);
   const [metaTitle, setMetaTitle] = useState("");
   const [metaStartDate, setMetaStartDate] = useState("");
@@ -514,9 +679,14 @@ function TripDetailContent() {
   const [metaChildren, setMetaChildren] = useState(0);
   const [metaError, setMetaError] = useState("");
   const [isSavingMeta, setIsSavingMeta] = useState(false);
+  const [isWeatherLoading, setIsWeatherLoading] = useState(false);
   const agentVersions = useAgentStore((s) => s.versions);
   const agentCurrentVN = useAgentStore((s) => s.currentVersionNumber);
   const agentLogs = useAgentStore((s) => s.actionLog);
+  const ensureChecklist = useTripChecklistStore((s) => s.ensureChecklist);
+  const checklistCategories = useTripChecklistStore((s) => s.checklistsByTripId[tripId] ?? []);
+  const toggleChecklistItem = useTripChecklistStore((s) => s.toggleItem);
+  const addChecklistItem = useTripChecklistStore((s) => s.addItem);
 
   const [loadingTrip, setLoadingTrip] = useState(true);
   const sensors = useSensors(
@@ -560,6 +730,10 @@ function TripDetailContent() {
     };
   }, [tripId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    ensureChecklist(tripId);
+  }, [ensureChecklist, tripId]);
+
   const trip = currentTrip?.id === tripId ? currentTrip : null;
   // Generate placeholder days from date range if no days exist yet
   const normalizedTripDays = normalizeDisplayDays(trip?.days);
@@ -576,13 +750,63 @@ function TripDetailContent() {
   const [editingActivity, setEditingActivity] = useState<Activity | null>(null);
 
   useEffect(() => {
+    if (!trip?.destination || !trip.days?.length) return;
+    const days = normalizeDisplayDays(trip.days);
+    if (days.some((day) => day.weather)) return;
+
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) setIsWeatherLoading(true);
+    });
+    fetch(`/api/weather?${new URLSearchParams({ destination: trip.destination, days: String(Math.min(4, days.length)) })}`)
+      .then((res) => res.ok ? res.json() : null)
+      .then((payload: { success?: boolean; data?: WeatherResponse } | null) => {
+        if (cancelled || !payload?.success || !payload.data?.forecasts?.length) return;
+        const weatherByDate = new Map(payload.data.forecasts.map((forecast) => [forecast.date, forecast]));
+        const updatedTrip: Trip = {
+          ...trip,
+          days: days.map((day) => {
+            const forecast = weatherByDate.get(day.date);
+            if (!forecast) return day;
+            return {
+              ...day,
+              weather: {
+                date: forecast.date,
+                condition: forecast.condition,
+                tempHigh: forecast.tempHigh,
+                tempLow: forecast.tempLow,
+                humidity: forecast.humidity,
+                windSpeed: forecast.windSpeed,
+                icon: forecast.icon,
+              },
+              updatedAt: new Date().toISOString(),
+            };
+          }),
+          updatedAt: new Date().toISOString(),
+        };
+        saveTrip(updatedTrip);
+        setCurrentTrip(updatedTrip);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setIsWeatherLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [saveTrip, setCurrentTrip, trip]);
+
+  useEffect(() => {
     if (!trip || !showMetaEditor) return;
-    setMetaTitle(trip.title);
-    setMetaStartDate(trip.startDate);
-    setMetaDayCount(derivedDayCount);
-    setMetaAdults(trip.travelers.adults);
-    setMetaChildren(trip.travelers.children);
-    setMetaError("");
+    queueMicrotask(() => {
+      setMetaTitle(trip.title);
+      setMetaStartDate(trip.startDate);
+      setMetaDayCount(derivedDayCount);
+      setMetaAdults(trip.travelers.adults);
+      setMetaChildren(trip.travelers.children);
+      setMetaError("");
+    });
   }, [trip, showMetaEditor, derivedDayCount]);
 
   const handleAddActivity = (formData: AddActivityInput) => {
@@ -941,53 +1165,85 @@ function TripDetailContent() {
 
       <div className="mx-auto grid max-w-[1440px] gap-8 px-5 py-7 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:px-8">
         <main className="min-w-0">
-          <DndContext
-            sensors={sensors}
-            collisionDetection={pointerWithin}
-            onDragEnd={handleActivityDragEnd}
-          >
-            <div className="mb-5 flex min-h-[58px] gap-6 overflow-x-auto border-b border-outline-variant/70">
-              {displayDays.map((day, i) => (
-                <DayTabDropButton
-                  key={day.id}
-                  day={day}
-                  index={i}
-                  isSelected={selectedDayIndex === i}
-                  onClick={() => setSelectedDay(i)}
+          <div className="mb-5 flex min-h-[52px] gap-2 overflow-x-auto rounded-[18px] border border-outline-variant/60 bg-white/78 p-1 shadow-[0_12px_30px_rgba(8,35,69,0.04)]">
+            {[
+              { id: "itinerary" as const, label: "每日行程", icon: "map" },
+              { id: "checklist" as const, label: "旅行清单", icon: "check_circle" },
+            ].map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setActiveTripTab(tab.id)}
+                className={cn(
+                  "flex min-w-[120px] items-center justify-center gap-2 rounded-[14px] px-4 py-2 text-sm font-medium transition-colors",
+                  activeTripTab === tab.id
+                    ? "bg-primary text-white shadow-[0_10px_24px_rgba(8,35,69,0.12)]"
+                    : "text-on-surface-variant hover:bg-surface-container-low"
+                )}
+              >
+                <Icon name={tab.icon} className="text-[16px]" />
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          {activeTripTab === "itinerary" ? (
+            <>
+              <DndContext
+                sensors={sensors}
+                collisionDetection={pointerWithin}
+                onDragEnd={handleActivityDragEnd}
+              >
+                <div className="mb-5 flex min-h-[58px] gap-6 overflow-x-auto border-b border-outline-variant/70">
+                  {displayDays.map((day, i) => (
+                    <DayTabDropButton
+                      key={day.id}
+                      day={day}
+                      index={i}
+                      isSelected={selectedDayIndex === i}
+                      onClick={() => setSelectedDay(i)}
+                    />
+                  ))}
+                </div>
+
+                {selectedDay && (
+                  <DayCard
+                    key={selectedDay.id}
+                    day={selectedDay}
+                    dayIndex={selectedDayIndex}
+                    isSelected
+                    onSelect={() => setSelectedDay(selectedDayIndex)}
+                    onRemoveActivity={removeActivity}
+                    onOpenForm={(dayId) => {
+                      setEditingActivity(null);
+                      setAddingToDay(dayId);
+                    }}
+                    onEditActivity={(activity) => {
+                      setAddingToDay(activity.dayId);
+                      setEditingActivity(activity);
+                    }}
+                  />
+                )}
+              </DndContext>
+
+              {addingToDay && (
+                <AddActivityForm
+                  dayId={addingToDay}
+                  cityName={trip?.destination || ""}
+                  onAdd={handleAddActivity}
+                  onClose={() => {
+                    setAddingToDay(null);
+                    setEditingActivity(null);
+                  }}
+                  initialActivity={editingActivity}
                 />
-              ))}
-            </div>
-
-            {selectedDay && (
-              <DayCard
-                key={selectedDay.id}
-                day={selectedDay}
-                dayIndex={selectedDayIndex}
-                isSelected
-                onSelect={() => setSelectedDay(selectedDayIndex)}
-                onRemoveActivity={removeActivity}
-                onOpenForm={(dayId) => {
-                  setEditingActivity(null);
-                  setAddingToDay(dayId);
-                }}
-                onEditActivity={(activity) => {
-                  setAddingToDay(activity.dayId);
-                  setEditingActivity(activity);
-                }}
-              />
-            )}
-          </DndContext>
-
-          {addingToDay && (
-            <AddActivityForm
-              dayId={addingToDay}
-              cityName={trip?.destination || ""}
-              onAdd={handleAddActivity}
-              onClose={() => {
-                setAddingToDay(null);
-                setEditingActivity(null);
-              }}
-              initialActivity={editingActivity}
+              )}
+            </>
+          ) : (
+            <TravelChecklistView
+              categories={checklistCategories}
+              onToggle={(categoryId, itemId) => toggleChecklistItem(trip.id, categoryId, itemId)}
+              onAdd={(categoryId, label) => addChecklistItem(trip.id, categoryId, label)}
             />
           )}
         </main>
@@ -1008,11 +1264,9 @@ function TripDetailContent() {
           </div>
 
           <div className="space-y-4 lg:flex-[2] lg:overflow-visible">
+            <WeatherPanel days={displayDays} isLoading={isWeatherLoading} />
             <BudgetEstimate days={displayDays} />
             <AIActionBar onToggleAgent={() => setShowAgentDrawer(!showAgentDrawer)} />
-          </div>
-          <div className="lg:hidden">
-            <WeatherPanel days={displayDays} />
           </div>
         </aside>
       </div>
