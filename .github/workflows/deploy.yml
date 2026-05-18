@@ -69,7 +69,7 @@ jobs:
             ssh-keyscan -H github.com >> ~/.ssh/known_hosts
             chmod 600 ~/.ssh/known_hosts
             cd /var/www/travel-planner
-            git -c credential.helper= -c http.extraheader="AUTHORIZATION: bearer ${GITHUB_TOKEN}" pull --ff-only "https://github.com/${GITHUB_REPOSITORY}.git" main
+            GIT_TERMINAL_PROMPT=0 git -c credential.helper='!f() { echo username=x-access-token; echo password=${GITHUB_TOKEN}; }; f' pull --ff-only "https://github.com/${GITHUB_REPOSITORY}.git" main
             npm ci
             npm run build
             if pm2 describe travel-planner > /dev/null; then
