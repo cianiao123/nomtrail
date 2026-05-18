@@ -374,59 +374,56 @@ function DayCard({
   );
 }
 
-/* ====== Weather Panel ====== */
-function WeatherPanel({ days, isLoading }: { days: Day[]; isLoading?: boolean }) {
+/* ====== Header Weather Strip ====== */
+function HeaderWeatherStrip({ days, isLoading }: { days: Day[]; isLoading?: boolean }) {
   const displayWeatherDays = normalizeDisplayDays(days);
   const daysWithWeather = displayWeatherDays.filter((d) => d.weather);
 
   return (
-    <div className="luxury-card rounded-[24px] p-4">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <h3 className="font-headline-sm text-headline-sm text-on-surface">天气预报</h3>
-        <span className="rounded-full bg-surface-container-low px-2.5 py-1 text-[11px] font-medium text-on-surface-variant">
-          {daysWithWeather.length > 0 ? `${daysWithWeather.length} 天` : isLoading ? "更新中" : "待更新"}
-        </span>
-      </div>
-
+    <div className="hidden h-[72px] min-w-[420px] max-w-[620px] flex-1 items-center rounded-[18px] border border-outline-variant/60 bg-white/76 px-4 shadow-[0_14px_34px_rgba(8,35,69,0.05)] xl:flex">
       {daysWithWeather.length > 0 ? (
-        <div className="flex gap-4 overflow-x-auto pb-2">
-          {displayWeatherDays.map((day) => (
-            <div key={day.id} className="flex min-w-[60px] flex-col items-center">
-              <span className="font-caption text-on-surface-variant">Day {day.dayIndex + 1}</span>
+        <div className="flex w-full items-center gap-4 overflow-x-auto">
+          <div className="shrink-0">
+            <p className="text-xs font-semibold tracking-[0.14em] text-on-surface-variant">天气</p>
+            <p className="mt-1 text-sm font-medium text-on-surface">{daysWithWeather.length} 天预报</p>
+          </div>
+          <div className="h-9 w-px shrink-0 bg-outline-variant/70" />
+          {displayWeatherDays.slice(0, 4).map((day) => (
+            <div key={day.id} className="flex min-w-[92px] items-center gap-2 rounded-[14px] bg-surface-container-low/70 px-2.5 py-2">
               {day.weather ? (
                 <>
                   <Icon
                     name={day.weather.condition.includes("雨") ? "rainy" : day.weather.condition.includes("晴") ? "wb_sunny" : "partly_cloudy_day"}
-                    className="my-1 text-[22px] text-primary"
+                    className="shrink-0 text-[22px] text-primary"
                   />
-                  <span className="font-caption font-medium">{day.weather.tempHigh}°</span>
-                  <span className="font-caption text-on-surface-variant">{day.weather.tempLow}°</span>
-                  <span className="mt-1 max-w-[64px] truncate text-[11px] text-on-surface-variant">{day.weather.condition}</span>
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-medium text-on-surface-variant">Day {day.dayIndex + 1}</p>
+                    <p className="text-sm font-semibold text-on-surface">{day.weather.tempLow}°~{day.weather.tempHigh}°</p>
+                    <p className="truncate text-[11px] text-on-surface-variant">{day.weather.condition}</p>
+                  </div>
                 </>
               ) : (
                 <>
-                  <Icon name="cloud_queue" className="my-1 text-[22px] text-on-surface-variant/45" />
-                  <span className="font-caption font-medium text-on-surface-variant">--°</span>
-                  <span className="font-caption text-on-surface-variant/70">待更新</span>
+                  <Icon name="cloud_queue" className="shrink-0 text-[22px] text-on-surface-variant/45" />
+                  <div>
+                    <p className="text-[11px] font-medium text-on-surface-variant">Day {day.dayIndex + 1}</p>
+                    <p className="text-sm font-semibold text-on-surface-variant">待更新</p>
+                  </div>
                 </>
               )}
             </div>
           ))}
         </div>
       ) : (
-        <div className="rounded-[16px] border border-dashed border-outline-variant/70 bg-white/54 px-3 py-4">
-          <div className="flex items-center gap-3">
-            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[14px] bg-primary-fixed/45 text-primary">
-              <Icon name={isLoading ? "sync" : "partly_cloudy_day"} className={cn("text-[20px]", isLoading && "animate-spin")} />
-            </span>
-            <div className="min-w-0">
-              <p className="text-sm font-medium text-on-surface">
-                {isLoading ? "正在获取天气" : "暂无天气数据"}
-              </p>
-              <p className="mt-1 text-xs leading-5 text-on-surface-variant">
-                天气会用于判断雨天备选、室内活动和每天出行舒适度。
-              </p>
-            </div>
+        <div className="flex items-center gap-3">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[14px] bg-primary-fixed/45 text-primary">
+            <Icon name={isLoading ? "sync" : "partly_cloudy_day"} className={cn("text-[20px]", isLoading && "animate-spin")} />
+          </span>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-on-surface">
+              {isLoading ? "正在更新天气" : "天气待更新"}
+            </p>
+            <p className="mt-0.5 text-xs text-on-surface-variant">生成后用于提示雨天备选和出行舒适度</p>
           </div>
         </div>
       )}
@@ -1043,8 +1040,8 @@ function TripDetailContent() {
   return (
     <div className="min-h-screen bg-[linear-gradient(180deg,#fbfdff_0%,#f4f8fc_100%)] pb-24">
       <header className="border-b border-outline-variant/60 bg-white/72 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-[1400px] items-center justify-between gap-4 px-5 py-5 lg:px-8">
-          <div className="flex items-center gap-5">
+        <div className="mx-auto flex max-w-[1400px] items-center justify-between gap-5 px-5 py-5 lg:px-8">
+          <div className="flex min-w-0 flex-1 items-center gap-5">
             <button
               onClick={() => router.back()}
               className="flex h-11 w-11 items-center justify-center rounded-lg text-on-surface transition-colors hover:bg-surface-container"
@@ -1059,6 +1056,7 @@ function TripDetailContent() {
               </p>
             </div>
           </div>
+          <HeaderWeatherStrip days={displayDays} isLoading={isWeatherLoading} />
           <div className="hidden items-center gap-3 md:flex">
             <button
               onClick={() => setShowMetaEditor(true)}
@@ -1264,7 +1262,6 @@ function TripDetailContent() {
           </div>
 
           <div className="space-y-4 lg:flex-[2] lg:overflow-visible">
-            <WeatherPanel days={displayDays} isLoading={isWeatherLoading} />
             <BudgetEstimate days={displayDays} />
             <AIActionBar onToggleAgent={() => setShowAgentDrawer(!showAgentDrawer)} />
           </div>
