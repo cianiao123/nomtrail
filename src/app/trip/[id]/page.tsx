@@ -388,7 +388,7 @@ function HeaderWeatherStrip({ days, isLoading }: { days: Day[]; isLoading?: bool
             <p className="mt-1 text-sm font-medium text-on-surface">{daysWithWeather.length} 天预报</p>
           </div>
           <div className="h-9 w-px shrink-0 bg-outline-variant/70" />
-          {displayWeatherDays.slice(0, 4).map((day) => (
+          {displayWeatherDays.slice(0, 4).map((day, index) => (
             <div key={day.id} className="flex min-w-[92px] items-center gap-2 rounded-[14px] bg-surface-container-low/70 px-2.5 py-2">
               {day.weather ? (
                 <>
@@ -397,7 +397,7 @@ function HeaderWeatherStrip({ days, isLoading }: { days: Day[]; isLoading?: bool
                     className="shrink-0 text-[22px] text-primary"
                   />
                   <div className="min-w-0">
-                    <p className="text-[11px] font-medium text-on-surface-variant">Day {day.dayIndex + 1}</p>
+                    <p className="text-[11px] font-medium text-on-surface-variant">Day {index + 1}</p>
                     <p className="text-sm font-semibold text-on-surface">{day.weather.tempLow}°~{day.weather.tempHigh}°</p>
                     <p className="truncate text-[11px] text-on-surface-variant">{day.weather.condition}</p>
                   </div>
@@ -406,7 +406,7 @@ function HeaderWeatherStrip({ days, isLoading }: { days: Day[]; isLoading?: bool
                 <>
                   <Icon name="cloud_queue" className="shrink-0 text-[22px] text-on-surface-variant/45" />
                   <div>
-                    <p className="text-[11px] font-medium text-on-surface-variant">Day {day.dayIndex + 1}</p>
+                    <p className="text-[11px] font-medium text-on-surface-variant">Day {index + 1}</p>
                     <p className="text-sm font-semibold text-on-surface-variant">待更新</p>
                   </div>
                 </>
