@@ -19,6 +19,9 @@ jobs:
     timeout-minutes: 20
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Configure SSH
         env:
           DEPLOY_HOST_SECRET: ${{ secrets.DEPLOY_HOST || secrets.TENCENT_HOST }}
@@ -55,8 +58,6 @@ jobs:
           DEPLOY_USER_SECRET: ${{ secrets.DEPLOY_USER || secrets.TENCENT_USER || 'ubuntu' }}
           DEPLOY_PORT_SECRET: ${{ secrets.DEPLOY_PORT || '22' }}
           DEPLOY_PATH_SECRET: ${{ secrets.DEPLOY_PATH || '/var/www/travel-planner' }}
-          GITHUB_TOKEN: ${{ github.token }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           DEPLOY_HOST="$(printf '%s' "$DEPLOY_HOST_SECRET" | tr -d '[:space:]')"
@@ -82,23 +83,16 @@ jobs:
             DEPLOY_PATH="/var/www/travel-planner"
           fi
           echo "Deploying to ${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PORT}"
+          tar \
+            --exclude='.git' \
+            --exclude='.next' \
+            --exclude='node_modules' \
+            --exclude='.env.local' \
+            --exclude='.env.production' \
+            -czf - . | ssh -i ~/.ssh/deploy_key -p "$DEPLOY_PORT" "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p '${DEPLOY_PATH}' && tar -xzf - -C '${DEPLOY_PATH}'"
           ssh -i ~/.ssh/deploy_key -p "$DEPLOY_PORT" "${DEPLOY_USER}@${DEPLOY_HOST}" <<EOF
             set -euo pipefail
-            mkdir -p ~/.ssh
-            chmod 700 ~/.ssh
-            ssh-keyscan -H github.com >> ~/.ssh/known_hosts
-            chmod 600 ~/.ssh/known_hosts
-            mkdir -p "${DEPLOY_PATH}"
             cd "${DEPLOY_PATH}"
-            if [ ! -d .git ]; then
-              git init
-              git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
-              GIT_TERMINAL_PROMPT=0 git -c credential.helper='!f() { echo username=x-access-token; echo password=${GITHUB_TOKEN}; }; f' fetch origin main
-              git checkout -f main
-            else
-              git checkout main
-              GIT_TERMINAL_PROMPT=0 git -c credential.helper='!f() { echo username=x-access-token; echo password=${GITHUB_TOKEN}; }; f' pull --ff-only "https://github.com/${GITHUB_REPOSITORY}.git" main
-            fi
             npm ci
             npm run build
             if pm2 describe travel-planner > /dev/null; then
