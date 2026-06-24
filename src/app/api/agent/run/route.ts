@@ -5,12 +5,11 @@
  */
 
 import { NextRequest } from "next/server";
-import { createClient } from "@supabase/supabase-js";
 import { travelAgentGraph } from "@/lib/agent/graph";
 import { createInitialAgentState } from "@/lib/agent/sessionContext";
+import { loadAgentSession, saveAgentSession } from "@/lib/agent/sessionStore";
 import { formatAgentNodeName } from "@/lib/agent/agents/registry";
 import { parseWeatherQuery } from "@/lib/agent/weatherIntent";
-import { SERVER_ANONYMOUS_USER_ID } from "@/lib/auth/guestUser";
 import type { TravelAgentState } from "@/lib/agent/state";
 import type { AgentRunRequest, AgentRunSSEEvent } from "@/types/agent";
 
@@ -59,60 +58,6 @@ function buildProgressEvents(message: string): ProgressEvent[] {
   ];
 }
 
-function getSupabase() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { auth: { persistSession: false } }
-  );
-}
-
-async function loadSession(threadId: string): Promise<TravelAgentState | null> {
-  const supabase = getSupabase();
-  const { data } = await supabase
-    .from("agent_sessions")
-    .select("state_data")
-    .eq("thread_id", threadId)
-    .maybeSingle();
-  return (data?.state_data as TravelAgentState) ?? null;
-}
-
-async function saveSession(state: TravelAgentState, status: string) {
-  try {
-    const supabase = getSupabase();
-    const payload = {
-      thread_id: state.threadId,
-      user_id: state.userId || SERVER_ANONYMOUS_USER_ID,
-      trip_id: state.tripId || null,
-      status,
-      state_data: JSON.parse(JSON.stringify(state)), // ensure serializable
-      updated_at: new Date().toISOString(),
-    };
-
-    const { data: existing, error: findError } = await supabase
-      .from("agent_sessions")
-      .select("id")
-      .eq("thread_id", state.threadId)
-      .maybeSingle();
-    if (findError) throw findError;
-
-    const { error } = existing
-      ? await supabase
-        .from("agent_sessions")
-        .update(payload)
-        .eq("thread_id", state.threadId)
-      : await supabase
-        .from("agent_sessions")
-        .insert({ id: crypto.randomUUID(), ...payload });
-    if (error) {
-      // Surface save error in the debug output
-      (state as Record<string, unknown>)._saveError = JSON.stringify(error);
-    }
-  } catch (err) {
-    (state as Record<string, unknown>)._saveError = String(err);
-  }
-}
-
 export async function POST(req: NextRequest) {
   const body: AgentRunRequest = await req.json();
   const { threadId, message, tripId, userId } = body;
@@ -135,7 +80,7 @@ export async function POST(req: NextRequest) {
 
       try {
         // Load previous session for multi-turn memory
-        const prevState = await loadSession(threadId);
+        const prevState = await loadAgentSession(threadId);
         const requestStartedAt = Date.now();
         const requestDeadlineAt = requestStartedAt + AGENT_ROUTE_BUDGET_MS;
 
@@ -167,7 +112,7 @@ export async function POST(req: NextRequest) {
 
         // Human-in-the-loop checkpoint
         if (result.needsHumanConfirmation) {
-          await saveSession(result, "awaiting_confirmation");
+          await saveAgentSession(result, "awaiting_confirmation");
           emit({
             type: "awaiting_confirmation",
             confirmationType: result.pendingConfirmationType ?? "places",
@@ -224,7 +169,7 @@ export async function POST(req: NextRequest) {
             { role: "agent" as const, content: result.assistantMessage },
           ];
         }
-        await saveSession(result, "completed");
+        await saveAgentSession(result, "completed");
 
         emit({
           type: "complete",

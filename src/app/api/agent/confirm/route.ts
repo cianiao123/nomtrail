@@ -3,9 +3,9 @@
  */
 
 import { NextRequest } from "next/server";
-import { createClient } from "@supabase/supabase-js";
 import { travelAgentGraph } from "@/lib/agent/graph";
 import { formatAgentNodeName } from "@/lib/agent/agents/registry";
+import { loadAgentSession, saveAgentSession } from "@/lib/agent/sessionStore";
 import { SERVER_ANONYMOUS_USER_ID } from "@/lib/auth/guestUser";
 import type { TravelAgentState } from "@/lib/agent/state";
 import type { AgentRunSSEEvent, AgentConfirmRequest, ConfirmedPlace } from "@/types/agent";
@@ -16,14 +16,6 @@ export const maxDuration = 120;
 
 const AGENT_ROUTE_BUDGET_MS = (maxDuration - 8) * 1000;
 
-function getSupabase() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { auth: { persistSession: false } }
-  );
-}
-
 export async function POST(req: NextRequest) {
   const body: AgentConfirmRequest = await req.json();
   const { threadId, tripId, userId, decision } = body;
@@ -32,18 +24,12 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: "Missing required fields" }, { status: 400 });
   }
 
-  const supabase = getSupabase();
-  const { data: session } = await supabase
-    .from("agent_sessions")
-    .select("state_data")
-    .eq("thread_id", threadId)
-    .maybeSingle();
-
-  if (!session?.state_data) {
+  const sessionState = await loadAgentSession(threadId);
+  if (!sessionState) {
     return Response.json({ error: "Session not found" }, { status: 404 });
   }
 
-  const savedState = session.state_data as TravelAgentState;
+  const savedState = sessionState as TravelAgentState;
   if (tripId) savedState.tripId = tripId;
   savedState.userId = userId || savedState.userId || SERVER_ANONYMOUS_USER_ID;
   const pendingType = savedState.pendingConfirmationType;
@@ -120,30 +106,7 @@ export async function POST(req: NextRequest) {
         })) as TravelAgentState;
 
         if (result.needsHumanConfirmation) {
-          const payload = {
-            thread_id: result.threadId,
-            user_id: result.userId || savedState.userId || SERVER_ANONYMOUS_USER_ID,
-            trip_id: result.tripId || null,
-            status: "awaiting_confirmation",
-            state_data: result,
-            updated_at: new Date().toISOString(),
-          };
-          const { data: existingSession, error: findError } = await supabase
-            .from("agent_sessions")
-            .select("id")
-            .eq("thread_id", result.threadId)
-            .maybeSingle();
-          if (findError) throw findError;
-
-          const { error: saveError } = existingSession
-            ? await supabase
-              .from("agent_sessions")
-              .update(payload)
-              .eq("thread_id", result.threadId)
-            : await supabase
-              .from("agent_sessions")
-              .insert({ id: crypto.randomUUID(), ...payload });
-          if (saveError) throw saveError;
+          await saveAgentSession(result, "awaiting_confirmation");
 
           emit({
             type: "awaiting_confirmation",
@@ -180,27 +143,8 @@ export async function POST(req: NextRequest) {
             { role: "agent" as const, content: result.assistantMessage },
           ];
         }
-        const payload = {
-          thread_id: result.threadId,
-          user_id: result.userId || savedState.userId || SERVER_ANONYMOUS_USER_ID, trip_id: result.tripId || null,
-          status: "completed", state_data: result, updated_at: new Date().toISOString(),
-        };
-        const { data: existingSession, error: findError } = await supabase
-          .from("agent_sessions")
-          .select("id")
-          .eq("thread_id", result.threadId)
-          .maybeSingle();
-        if (findError) throw findError;
-
-        const { error: saveError } = existingSession
-          ? await supabase
-            .from("agent_sessions")
-            .update(payload)
-            .eq("thread_id", result.threadId)
-          : await supabase
-            .from("agent_sessions")
-            .insert({ id: crypto.randomUUID(), ...payload });
-        if (saveError) throw saveError;
+        result.userId = result.userId || savedState.userId || SERVER_ANONYMOUS_USER_ID;
+        await saveAgentSession(result, "completed");
 
         emit({ type: "complete", intent: result.intent, message: result.assistantMessage || undefined,
           data: {

@@ -66,6 +66,7 @@ import {
 } from "@/lib/weather/amapWeather";
 import { formatWeatherAnswer, parseWeatherQuery } from "./weatherIntent";
 import { fetchAmapRoute } from "@/lib/poi/amapRoute";
+import { saveLocalTrip } from "@/lib/trips/localTripStore";
 import { formatAgentNodeName } from "./agents/registry";
 import {
   createTransportPlanFromMessage,
@@ -3251,7 +3252,7 @@ export async function collectMissingInfoNode(
   // Filter out fields that are already satisfied
   const reallyMissing = missing.filter((m) => {
     if (m === "origin" && parsed?.origin) return false;
-    if ((m === "dates" || m === "startDate") && parsed?.dayCount) return false;
+    if ((m === "dates" || m === "startDate" || m === "endDate") && parsed?.dayCount) return false;
     if ((m === "travelers" || m === "adults") && parsed?.travelers?.adults) return false;
     if (m === "budget" && parsed?.budget) return false;
     if (m === "preferences" && parsed?.preferences?.length) return false;
@@ -3276,6 +3277,7 @@ export async function collectMissingInfoNode(
   // User clicked "继续修改" — force re-show the form
   const isEditRequest = /^修改信息$|^继续修改$/.test(state.currentMessage ?? "");
   const isFormSubmit = /^(补充信息|确认信息)[:：]/.test(state.currentMessage ?? "");
+  const wantsGeneration = /直接|开始|生成|规划|安排|帮我/.test(state.currentMessage ?? "");
   const questionLabels: Record<string, string> = {
     origin: "从哪里出发？",
     destination: "想去哪里？",
@@ -3326,12 +3328,15 @@ export async function collectMissingInfoNode(
     value: includeValues ? currentValue(field) : "",
   }));
 
-  if (hasEssential && !isEditRequest && isFormSubmit) {
+  if (hasEssential && !isEditRequest && (isFormSubmit || wantsGeneration)) {
+    const continuationLog = isFormSubmit
+      ? "form submitted, continue planning"
+      : "direct generation, continue planning";
     return {
       missingInfo: [...reallyMissing],
       assistantMessage: "",
       responsePayload: undefined,
-      actionLog: [logAction(state, "collect_missing_info", "form submitted, continue planning", Date.now() - t0)],
+      actionLog: [logAction(state, "collect_missing_info", continuationLog, Date.now() - t0)],
     };
   }
 
@@ -3401,6 +3406,94 @@ function getSupabase() {
   );
 }
 
+function buildLocalTripFromDraft({
+  tripId,
+  userId,
+  title,
+  destination,
+  startDate,
+  endDate,
+  dayCount,
+  state,
+}: {
+  tripId: string;
+  userId: string;
+  title: string;
+  destination: string;
+  startDate: string;
+  endDate: string;
+  dayCount: number;
+  state: TravelAgentState;
+}): Trip {
+  const now = new Date().toISOString();
+  const reqs = state.parsedTripRequirements;
+  const draft = state.itineraryDraft;
+  const days = draft?.days?.length
+    ? draft.days.map((day, index) => {
+        const dayId = day.id || crypto.randomUUID();
+        return {
+          ...day,
+          id: dayId,
+          tripId,
+          dayIndex: typeof day.dayIndex === "number" ? day.dayIndex : index,
+          date: day.date || new Date(new Date(startDate).getTime() + index * 86400000).toISOString().slice(0, 10),
+          notes: day.notes || "",
+          activities: (day.activities ?? []).map((activity, activityIndex) => ({
+            ...activity,
+            id: activity.id || crypto.randomUUID(),
+            dayId,
+            order: activity.order ?? activityIndex + 1,
+            type: normalizeGeneratedActivityType(activity.type),
+            poi: activity.poi ?? null,
+            customName: activity.customName || activity.poi?.name || "",
+            isGenerated: true,
+            createdAt: activity.createdAt || now,
+            updatedAt: activity.updatedAt || now,
+          })),
+          createdAt: day.createdAt || now,
+          updatedAt: day.updatedAt || now,
+        };
+      })
+    : Array.from({ length: dayCount }, (_, index) => {
+        const dayId = crypto.randomUUID();
+        return {
+          id: dayId,
+          tripId,
+          dayIndex: index + 1,
+          date: new Date(new Date(startDate).getTime() + index * 86400000).toISOString().slice(0, 10),
+          activities: [],
+          notes: "",
+          createdAt: now,
+          updatedAt: now,
+        };
+      });
+
+  return {
+    id: tripId,
+    userId,
+    title,
+    destination,
+    destinationCoord: reqs?.destinationCoord ?? { lat: 0, lng: 0 },
+    startDate,
+    endDate,
+    travelers: {
+      adults: reqs?.travelers?.adults ?? 1,
+      children: reqs?.travelers?.children ?? 0,
+    },
+    budget: {
+      currency: "CNY",
+      min: reqs?.budget?.min ?? 0,
+      max: reqs?.budget?.max ?? 10000,
+    },
+    preferences: (reqs?.preferences ?? []) as Trip["preferences"],
+    days,
+    status: draft?.days?.length ? "generated" : "draft",
+    isPublic: false,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
 export async function createTripNode(
   state: TravelAgentState
 ): Promise<Partial<TravelAgentState>> {
@@ -3425,11 +3518,11 @@ export async function createTripNode(
   const endDate = reqs.endDate ||
     new Date(new Date(startDate).getTime() + (dayCount - 1) * 86400000)
       .toISOString().slice(0, 10);
+  const tripId = crypto.randomUUID();
+  const userId = state.userId || SERVER_ANONYMOUS_USER_ID;
 
   try {
     const supabase = getSupabase();
-    const tripId = crypto.randomUUID();
-    const userId = state.userId || SERVER_ANONYMOUS_USER_ID;
 
     // Step 1: Create trip in Supabase
     const { error: tripError } = await supabase.from("trips").insert({
@@ -3559,9 +3652,43 @@ export async function createTripNode(
       actionLog: [logAction(state, "create_trip", `tripId=${tripId}, days=${savedDayCount}, activities=${savedActivityCount}`, Date.now() - t0)],
     };
   } catch (err) {
+    const localTrip = buildLocalTripFromDraft({
+      tripId,
+      userId,
+      title,
+      destination: dest,
+      startDate,
+      endDate,
+      dayCount,
+      state,
+    });
+    saveLocalTrip(localTrip);
+    const savedActivityCount = localTrip.days.reduce((sum, day) => sum + day.activities.length, 0);
+    const travelersStr = `${reqs.travelers?.adults ?? 1}成人${reqs.travelers?.children ? ` +${reqs.travelers.children}儿童` : ""}`;
+    const card = {
+      type: "trip_card",
+      tripId,
+      title,
+      destination: dest,
+      dates: `${startDate} ~ ${endDate}`,
+      dayCount,
+      travelers: travelersStr,
+      budget: formatBudget(reqs.budget),
+      savedDays: localTrip.days.length,
+      savedActivities: savedActivityCount,
+    };
+    let msg = `已为你创建 **${title}**，包含 ${localTrip.days.length} 天行程，${savedActivityCount} 个活动。`;
+    msg += "当前 Supabase 暂时连不上，我先保存到本地开发存储。点击下方卡片查看详情 →";
+    if (localTrip.days.length) {
+      msg = appendChecklistOffer(msg);
+    }
+
     return {
-      errors: [...(state.errors ?? []), `create_trip: ${(err as Error).message}`],
-      assistantMessage: `创建行程失败：${(err as Error).message.slice(0, 200)}`,
+      tripId,
+      responsePayload: card,
+      assistantMessage: msg,
+      errors: [...(state.errors ?? []), `create_trip remote fallback: ${(err as Error).message}`],
+      actionLog: [logAction(state, "create_trip", `local fallback tripId=${tripId}, days=${localTrip.days.length}, activities=${savedActivityCount}`, Date.now() - t0)],
     };
   }
 }

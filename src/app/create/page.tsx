@@ -36,6 +36,11 @@ const STEP_TO_PHASE: Record<string, CreatePhase> = {
   confirm_places: "confirm",
 };
 
+type AgentStreamResult = {
+  completeEvent: AgentRunSSEEvent | null;
+  awaitingConfirmationEvent: AgentRunSSEEvent | null;
+};
+
 function buildEmptyDays(tripId: string, startDate: string, endDate: string): Day[] {
   const start = new Date(startDate);
   const end = new Date(endDate);
@@ -92,13 +97,14 @@ function CreatePageContent() {
   const [progressPhase, setProgressPhase] = useState<CreatePhase>("idle");
   const [progressNotes, setProgressNotes] = useState<string[]>([]);
 
-  const readAgentStream = async (res: Response) => {
+  const readAgentStream = async (res: Response): Promise<AgentStreamResult> => {
     if (!res.ok || !res.body) throw new Error("Agent API error");
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
     let completeEvent: AgentRunSSEEvent | null = null;
+    let awaitingConfirmationEvent: AgentRunSSEEvent | null = null;
 
     while (true) {
       const { done, value } = await reader.read();
@@ -125,6 +131,7 @@ function CreatePageContent() {
             }
             break;
           case "awaiting_confirmation":
+            awaitingConfirmationEvent = event;
             setStatus(event.message || "等待确认...");
             setProgressPhase("confirm");
             break;
@@ -161,6 +168,40 @@ function CreatePageContent() {
             throw new Error(event.message || "生成失败");
         }
       }
+    }
+
+    return { completeEvent, awaitingConfirmationEvent };
+  };
+
+  const readTripIdFromComplete = (completeEvent: AgentRunSSEEvent | null) => {
+    const data = (completeEvent?.data ?? {}) as {
+      tripId?: string | null;
+      tripCard?: { tripId?: string | null } | null;
+    };
+    return data.tripId || data.tripCard?.tripId || "";
+  };
+
+  const continueAgentConfirmations = async (
+    threadId: string,
+    initialResult: AgentStreamResult
+  ) => {
+    let streamResult = initialResult;
+    let completeEvent = streamResult.completeEvent;
+
+    for (
+      let confirmationRound = 0;
+      !completeEvent && streamResult.awaitingConfirmationEvent && confirmationRound < 4;
+      confirmationRound += 1
+    ) {
+      setStatus(streamResult.awaitingConfirmationEvent.message || "正在确认并继续生成行程...");
+      setProgressPhase("confirm");
+      const confirmRes = await fetch("/api/agent/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ threadId, userId: currentUserId, decision: {} }),
+      });
+      streamResult = await readAgentStream(confirmRes);
+      completeEvent = streamResult.completeEvent;
     }
 
     return completeEvent;
@@ -312,13 +353,14 @@ function CreatePageContent() {
         body: JSON.stringify({ threadId, message, userId: currentUserId }),
       });
 
-      const firstComplete = await readAgentStream(runRes);
+      const firstResult = await readAgentStream(runRes);
+      const firstComplete = await continueAgentConfirmations(threadId, firstResult);
       const firstData = (firstComplete?.data ?? {}) as {
         tripId?: string | null;
         tripCard?: { tripId?: string | null } | null;
         questionCard?: { confirmMode?: boolean } | null;
       };
-      const firstTripId = firstData.tripId || firstData.tripCard?.tripId;
+      const firstTripId = readTripIdFromComplete(firstComplete);
 
       if (firstTripId) {
         setStatus("跳转到行程页...");
@@ -336,12 +378,9 @@ function CreatePageContent() {
           body: JSON.stringify({ threadId, userId: currentUserId, decision: {} }),
         });
 
-        const secondComplete = await readAgentStream(confirmRes);
-        const secondData = (secondComplete?.data ?? {}) as {
-          tripId?: string | null;
-          tripCard?: { tripId?: string | null } | null;
-        };
-        const secondTripId = secondData.tripId || secondData.tripCard?.tripId;
+        const secondResult = await readAgentStream(confirmRes);
+        const secondComplete = await continueAgentConfirmations(threadId, secondResult);
+        const secondTripId = readTripIdFromComplete(secondComplete);
 
         if (secondTripId) {
           setStatus("跳转到行程页...");

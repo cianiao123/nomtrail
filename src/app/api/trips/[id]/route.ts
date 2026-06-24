@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { loadLocalTrip } from "@/lib/trips/localTripStore";
 import type { ActivityType } from "@/types/trip";
 
 type DayRow = {
@@ -83,6 +84,10 @@ export async function GET(
       .maybeSingle();
 
     if (tripError || !tripRow) {
+      const localTrip = loadLocalTrip(id);
+      if (localTrip) {
+        return NextResponse.json({ success: true, data: localTrip });
+      }
       return NextResponse.json({ success: false, error: "行程不存在" }, { status: 404 });
     }
 
@@ -173,6 +178,11 @@ export async function GET(
 
     return NextResponse.json({ success: true, data: trip });
   } catch (err) {
+    const { id } = await params;
+    const localTrip = loadLocalTrip(id);
+    if (localTrip) {
+      return NextResponse.json({ success: true, data: localTrip });
+    }
     return NextResponse.json({ success: false, error: String(err) }, { status: 500 });
   }
 }
