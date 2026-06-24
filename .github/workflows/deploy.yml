@@ -1,4 +1,4 @@
-name: Deploy to Tencent Cloud
+name: Deploy to Server
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: tencent-cloud-deploy
+  group: server-deploy
   cancel-in-progress: true
 
 permissions:
@@ -21,55 +21,84 @@ jobs:
     steps:
       - name: Configure SSH
         env:
-          TENCENT_HOST: ${{ secrets.TENCENT_HOST }}
-          TENCENT_SSH_KEY: ${{ secrets.TENCENT_SSH_KEY }}
+          DEPLOY_HOST_SECRET: ${{ secrets.DEPLOY_HOST || secrets.TENCENT_HOST }}
+          DEPLOY_PORT_SECRET: ${{ secrets.DEPLOY_PORT || '22' }}
+          DEPLOY_SSH_KEY_SECRET: ${{ secrets.DEPLOY_SSH_KEY || secrets.TENCENT_SSH_KEY }}
         run: |
           set -euo pipefail
-          DEPLOY_HOST="$(printf '%s' "$TENCENT_HOST" | tr -d '[:space:]')"
+          DEPLOY_HOST="$(printf '%s' "$DEPLOY_HOST_SECRET" | tr -d '[:space:]')"
           DEPLOY_HOST="${DEPLOY_HOST#http://}"
           DEPLOY_HOST="${DEPLOY_HOST#https://}"
           DEPLOY_HOST="${DEPLOY_HOST#*@}"
           DEPLOY_HOST="${DEPLOY_HOST%%/*}"
+          DEPLOY_PORT="$(printf '%s' "$DEPLOY_PORT_SECRET" | tr -d '[:space:]')"
           if [ -z "$DEPLOY_HOST" ]; then
-            echo "TENCENT_HOST is empty after normalization"
+            echo "DEPLOY_HOST is empty after normalization"
+            exit 1
+          fi
+          if [ -z "$DEPLOY_SSH_KEY_SECRET" ]; then
+            echo "DEPLOY_SSH_KEY is empty"
+            exit 1
+          fi
+          if [ -z "$DEPLOY_PORT" ]; then
+            echo "DEPLOY_PORT is empty"
             exit 1
           fi
           mkdir -p ~/.ssh
-          printf '%s\n' "$TENCENT_SSH_KEY" > ~/.ssh/tencent_deploy_key
-          chmod 600 ~/.ssh/tencent_deploy_key
-          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+          printf '%s\n' "$DEPLOY_SSH_KEY_SECRET" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
 
       - name: Deploy on server
         env:
-          TENCENT_HOST: ${{ secrets.TENCENT_HOST }}
-          TENCENT_USER: ${{ secrets.TENCENT_USER }}
+          DEPLOY_HOST_SECRET: ${{ secrets.DEPLOY_HOST || secrets.TENCENT_HOST }}
+          DEPLOY_USER_SECRET: ${{ secrets.DEPLOY_USER || secrets.TENCENT_USER || 'ubuntu' }}
+          DEPLOY_PORT_SECRET: ${{ secrets.DEPLOY_PORT || '22' }}
+          DEPLOY_PATH_SECRET: ${{ secrets.DEPLOY_PATH || '/var/www/travel-planner' }}
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          DEPLOY_HOST="$(printf '%s' "$TENCENT_HOST" | tr -d '[:space:]')"
+          DEPLOY_HOST="$(printf '%s' "$DEPLOY_HOST_SECRET" | tr -d '[:space:]')"
           DEPLOY_HOST="${DEPLOY_HOST#http://}"
           DEPLOY_HOST="${DEPLOY_HOST#https://}"
           DEPLOY_HOST="${DEPLOY_HOST#*@}"
           DEPLOY_HOST="${DEPLOY_HOST%%/*}"
-          DEPLOY_USER="$(printf '%s' "${TENCENT_USER:-ubuntu}" | tr -d '[:space:]')"
+          DEPLOY_USER="$(printf '%s' "$DEPLOY_USER_SECRET" | tr -d '[:space:]')"
           DEPLOY_USER="${DEPLOY_USER%@*}"
+          DEPLOY_PORT="$(printf '%s' "$DEPLOY_PORT_SECRET" | tr -d '[:space:]')"
+          DEPLOY_PATH="$(printf '%s' "$DEPLOY_PATH_SECRET" | tr -d '[:space:]')"
           if [ -z "$DEPLOY_HOST" ]; then
-            echo "TENCENT_HOST is empty after normalization"
+            echo "DEPLOY_HOST is empty after normalization"
             exit 1
           fi
           if [ -z "$DEPLOY_USER" ]; then
             DEPLOY_USER="ubuntu"
           fi
-          echo "Deploying to ${DEPLOY_USER}@${DEPLOY_HOST}"
-          ssh -i ~/.ssh/tencent_deploy_key "${DEPLOY_USER}@${DEPLOY_HOST}" <<EOF
+          if [ -z "$DEPLOY_PORT" ]; then
+            DEPLOY_PORT="22"
+          fi
+          if [ -z "$DEPLOY_PATH" ]; then
+            DEPLOY_PATH="/var/www/travel-planner"
+          fi
+          echo "Deploying to ${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PORT}"
+          ssh -i ~/.ssh/deploy_key -p "$DEPLOY_PORT" "${DEPLOY_USER}@${DEPLOY_HOST}" <<EOF
             set -euo pipefail
             mkdir -p ~/.ssh
             chmod 700 ~/.ssh
             ssh-keyscan -H github.com >> ~/.ssh/known_hosts
             chmod 600 ~/.ssh/known_hosts
-            cd /var/www/travel-planner
-            GIT_TERMINAL_PROMPT=0 git -c credential.helper='!f() { echo username=x-access-token; echo password=${GITHUB_TOKEN}; }; f' pull --ff-only "https://github.com/${GITHUB_REPOSITORY}.git" main
+            mkdir -p "${DEPLOY_PATH}"
+            cd "${DEPLOY_PATH}"
+            if [ ! -d .git ]; then
+              git init
+              git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+              GIT_TERMINAL_PROMPT=0 git -c credential.helper='!f() { echo username=x-access-token; echo password=${GITHUB_TOKEN}; }; f' fetch origin main
+              git checkout -f main
+            else
+              git checkout main
+              GIT_TERMINAL_PROMPT=0 git -c credential.helper='!f() { echo username=x-access-token; echo password=${GITHUB_TOKEN}; }; f' pull --ff-only "https://github.com/${GITHUB_REPOSITORY}.git" main
+            fi
             npm ci
             npm run build
             if pm2 describe travel-planner > /dev/null; then

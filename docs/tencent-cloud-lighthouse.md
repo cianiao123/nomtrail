@@ -245,12 +245,14 @@ Paste the public key into `authorized_keys`.
 Add these GitHub repository secrets:
 
 ```txt
-TENCENT_HOST=101.32.186.10
-TENCENT_USER=ubuntu
-TENCENT_SSH_KEY=<contents of ~/.ssh/nomtrail_actions_deploy>
+DEPLOY_HOST=101.32.186.10
+DEPLOY_USER=ubuntu
+DEPLOY_PORT=22
+DEPLOY_PATH=/var/www/travel-planner
+DEPLOY_SSH_KEY=<contents of ~/.ssh/nomtrail_actions_deploy>
 ```
 
-Get the private key value for `TENCENT_SSH_KEY`:
+Get the private key value for `DEPLOY_SSH_KEY`:
 
 ```bash
 cat ~/.ssh/nomtrail_actions_deploy
@@ -265,7 +267,7 @@ Repository -> Settings -> Secrets and variables -> Actions -> New repository sec
 After the secrets are set, push to `main` or run the workflow manually from:
 
 ```txt
-Repository -> Actions -> Deploy to Tencent Cloud -> Run workflow
+Repository -> Actions -> Deploy to Server -> Run workflow
 ```
 
 ## Troubleshooting
